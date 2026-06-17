@@ -37,7 +37,7 @@ android {
         compose = true
     }
     packaging {
-        // youtubedl-android extracts its Python payload at runtime.
+        // youtubedl-android + ffmpeg extract their native payloads at runtime.
         jniLibs {
             useLegacyPackaging = true
         }
@@ -59,4 +59,7 @@ dependencies {
     implementation("androidx.compose.material3:material3")
 
     implementation("io.github.junkfood02.youtubedl-android:library:0.18.1")
+    implementation("io.github.junkfood02.youtubedl-android:ffmpeg:0.18.1")
+
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
 }
