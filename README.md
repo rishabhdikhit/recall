@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/banner.png" alt="Recall — Capture. Transcribe. Recall." width="520">
+</p>
+
 # Recall
 
 **Turn the videos you watch into a searchable memory.** Share an Instagram reel (or a YouTube link) into Recall, and it transcribes the audio, summarizes the core information, auto-tags it by topic, and saves it locally — so weeks later you can *search* for what someone actually said and find it instantly.
