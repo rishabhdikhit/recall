@@ -105,12 +105,10 @@ object Repo {
         starred = getInt(getColumnIndexOrThrow("starred")),
     )
 
-    private fun query(where: String?, args: Array<String>?): List<Entry> {
-        val sql = buildString {
-            append("SELECT * FROM entries")
-            if (where != null) append(" WHERE ").append(where)
-            append(" ORDER BY starred DESC, createdAt DESC")
-        }
+    private fun query(screenshots: Boolean, extraWhere: String?, args: Array<String>?): List<Entry> {
+        val scope = if (screenshots) "source = 'screenshot'" else "source <> 'screenshot'"
+        val where = if (extraWhere != null) "$scope AND ($extraWhere)" else scope
+        val sql = "SELECT * FROM entries WHERE $where ORDER BY starred DESC, createdAt DESC"
         val list = ArrayList<Entry>()
         helper.readableDatabase.rawQuery(sql, args).use { c ->
             while (c.moveToNext()) list.add(c.toEntry())
@@ -137,13 +135,15 @@ object Repo {
         helper.writableDatabase.insertWithOnConflict("entries", null, cv, SQLiteDatabase.CONFLICT_REPLACE)
     }
 
-    fun all(): List<Entry> = query(null, null)
+    fun all(screenshots: Boolean): List<Entry> = query(screenshots, null, null)
 
-    fun byTopic(topic: String): List<Entry> = query("topic = ?", arrayOf(topic))
+    fun byTopic(topic: String, screenshots: Boolean): List<Entry> =
+        query(screenshots, "topic = ?", arrayOf(topic))
 
-    fun search(q: String): List<Entry> {
+    fun search(q: String, screenshots: Boolean): List<Entry> {
         val like = "%$q%"
         return query(
+            screenshots,
             "title LIKE ? OR summary LIKE ? OR transcript LIKE ? OR caption LIKE ? OR subtags LIKE ?",
             arrayOf(like, like, like, like, like),
         )

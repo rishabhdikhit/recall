@@ -78,13 +78,28 @@ object Gemini {
     // rate-limited. Both are transient — retry with backoff so the user just sees it succeed.
     private val BACKOFF_MS = longArrayOf(2_000, 5_000, 12_000, 25_000)
 
-    private fun run(apiKey: String, model: String, mediaPart: JSONObject, caption: String): Analysis {
-        val promptText = if (caption.isNotBlank()) {
-            "$PROMPT\n\nThe author's caption (use as context — it often holds the key info, links or steps):\n$caption"
+    private const val IMAGE_PROMPT =
+        "You are analyzing screenshot image(s) — possibly several slides of one Instagram post/carousel. " +
+        "Read ALL text in them (OCR) and understand the visuals, then produce a structured record.\n" +
+        "- title: a short, catchy, specific title (max 70 chars).\n" +
+        "- summary: the core information across all slides, as tight prose, 3-6 sentences.\n" +
+        "- transcript: ALL the readable text from the images, kept useful and in order. Empty if there's no text.\n" +
+        "- topic: the single best-fit topic from the allowed list.\n" +
+        "- subtags: 2-5 specific lowercase keywords.\n" +
+        "- language: the primary language of the text (e.g. English, Hindi). 'none' if no text.\n" +
+        "- hasSpeech: always false for images."
+
+    private fun captioned(base: String, caption: String): String =
+        if (caption.isNotBlank()) {
+            "$base\n\nThe author's caption (use as context — it often holds the key info, links or steps):\n$caption"
         } else {
-            PROMPT
+            base
         }
-        val parts = JSONArray().put(mediaPart).put(JSONObject().put("text", promptText))
+
+    private fun run(apiKey: String, model: String, mediaParts: List<JSONObject>, promptText: String): Analysis {
+        val parts = JSONArray()
+        mediaParts.forEach { parts.put(it) }
+        parts.put(JSONObject().put("text", promptText))
         val contents = JSONArray().put(JSONObject().put("parts", parts))
         val genConfig = JSONObject()
             .put("responseMimeType", "application/json")
@@ -141,7 +156,7 @@ object Gemini {
     /** YouTube: Gemini ingests the URL directly, no download needed. */
     fun analyzeYoutube(apiKey: String, model: String, url: String, caption: String): Analysis {
         val part = JSONObject().put("file_data", JSONObject().put("file_uri", url))
-        return run(apiKey, model, part, caption)
+        return run(apiKey, model, listOf(part), captioned(PROMPT, caption))
     }
 
     /** Instagram/TikTok/etc: send the downloaded audio inline as base64. */
@@ -150,6 +165,14 @@ object Gemini {
             "inline_data",
             JSONObject().put("mime_type", mimeType).put("data", base64),
         )
-        return run(apiKey, model, part, caption)
+        return run(apiKey, model, listOf(part), captioned(PROMPT, caption))
+    }
+
+    /** Screenshots: send one or more images inline for OCR + understanding. */
+    fun analyzeImages(apiKey: String, model: String, images: List<Pair<String, String>>): Analysis {
+        val parts = images.map { (base64, mime) ->
+            JSONObject().put("inline_data", JSONObject().put("mime_type", mime).put("data", base64))
+        }
+        return run(apiKey, model, parts, IMAGE_PROMPT)
     }
 }

@@ -64,7 +64,7 @@ object Pdf {
             drawWrapped(e.summary, paint(12f, false, 0xFF222222.toInt()), 6)
             if (e.caption.isNotBlank()) drawWrapped("Caption: ${e.caption}", paint(10f, false, 0xFF666666.toInt()), 6)
             if (e.transcript.isNotBlank()) drawWrapped(e.transcript, paint(10f, false, 0xFF555555.toInt()), 6)
-            drawWrapped(e.url, paint(9f, false, 0xFF1A73E8.toInt()), 18)
+            if (e.source != "screenshot") drawWrapped(e.url, paint(9f, false, 0xFF1A73E8.toInt()), 18)
         }
         doc.finishPage(page)
 

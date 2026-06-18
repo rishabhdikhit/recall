@@ -80,6 +80,7 @@ private fun firstUrl(text: String?): String? =
 
 class MainActivity : ComponentActivity() {
     private var sharedUrl by mutableStateOf<String?>(null)
+    private var sharedImages by mutableStateOf<List<Uri>?>(null)
     private val notifPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -87,11 +88,17 @@ class MainActivity : ComponentActivity() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             notifPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
-        sharedUrl = sharedFrom(intent)
+        sharedUrl = sharedUrlFrom(intent)
+        sharedImages = sharedImagesFrom(intent)
         setContent {
             MaterialTheme(colorScheme = darkColorScheme(background = Bg, surface = Bg, primary = Accent)) {
                 Surface(modifier = Modifier.fillMaxSize(), color = Bg) {
-                    AppRoot(sharedUrl) { sharedUrl = null }
+                    AppRoot(
+                        sharedUrl = sharedUrl,
+                        sharedImages = sharedImages,
+                        onSharedConsumed = { sharedUrl = null },
+                        onImagesConsumed = { sharedImages = null },
+                    )
                 }
             }
         }
@@ -99,21 +106,37 @@ class MainActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        sharedFrom(intent)?.let { sharedUrl = it }
+        sharedUrlFrom(intent)?.let { sharedUrl = it }
+        sharedImagesFrom(intent)?.let { sharedImages = it }
     }
 
-    private fun sharedFrom(intent: Intent?): String? {
+    private fun sharedUrlFrom(intent: Intent?): String? {
         if (intent?.action == Intent.ACTION_SEND && intent.type == "text/plain") {
             return firstUrl(intent.getStringExtra(Intent.EXTRA_TEXT))
         }
         return null
     }
+
+    @Suppress("DEPRECATION")
+    private fun sharedImagesFrom(intent: Intent?): List<Uri>? {
+        if (intent == null || intent.type?.startsWith("image/") != true) return null
+        return when (intent.action) {
+            Intent.ACTION_SEND -> intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)?.let { listOf(it) }
+            Intent.ACTION_SEND_MULTIPLE -> intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM)?.toList()
+            else -> null
+        }
+    }
 }
 
-private enum class Tab { Library, Add, Settings }
+private enum class Tab { Library, Screenshots, Add, Settings }
 
 @Composable
-fun AppRoot(sharedUrl: String?, onSharedConsumed: () -> Unit) {
+fun AppRoot(
+    sharedUrl: String?,
+    sharedImages: List<Uri>?,
+    onSharedConsumed: () -> Unit,
+    onImagesConsumed: () -> Unit,
+) {
     var tab by remember { mutableStateOf(Tab.Library) }
     var entries by remember { mutableStateOf(listOf<Entry>()) }
     var query by remember { mutableStateOf("") }
@@ -144,15 +167,44 @@ fun AppRoot(sharedUrl: String?, onSharedConsumed: () -> Unit) {
         }
     }
 
+    // Shared screenshot(s): copy them into a capture folder and process in the background.
+    LaunchedEffect(sharedImages) {
+        val imgs = sharedImages ?: return@LaunchedEffect
+        onImagesConsumed()
+        if (Prefs.geminiKey(ctx).isBlank()) {
+            tab = Tab.Settings
+            Toast.makeText(ctx, "Add your Gemini key first", Toast.LENGTH_LONG).show()
+            return@LaunchedEffect
+        }
+        val captureId = withContext(Dispatchers.IO) {
+            val id = java.util.UUID.randomUUID().toString()
+            val dir = IngestService.captureDir(ctx, id)
+            imgs.forEachIndexed { i, uri ->
+                runCatching {
+                    val mime = ctx.contentResolver.getType(uri) ?: "image/jpeg"
+                    val ext = if (mime.contains("png")) "png" else "jpg"
+                    ctx.contentResolver.openInputStream(uri)?.use { input ->
+                        java.io.File(dir, "img_%03d.%s".format(i, ext)).outputStream().use { input.copyTo(it) }
+                    }
+                }
+            }
+            id
+        }
+        IngestService.startScreenshot(ctx, captureId)
+        tab = Tab.Screenshots
+        Toast.makeText(ctx, "Reading your screenshot(s) in the background…", Toast.LENGTH_LONG).show()
+    }
+
     LaunchedEffect(query, filterTopic, refresh, tab) {
-        if (tab == Tab.Library) {
+        if (tab == Tab.Library || tab == Tab.Screenshots) {
+            val ss = tab == Tab.Screenshots
             withContext(Dispatchers.IO) {
                 val es = when {
-                    query.isNotBlank() -> Repo.search(query.trim())
-                    filterTopic != null -> Repo.byTopic(filterTopic!!)
-                    else -> Repo.all()
+                    query.isNotBlank() -> Repo.search(query.trim(), ss)
+                    filterTopic != null -> Repo.byTopic(filterTopic!!, ss)
+                    else -> Repo.all(ss)
                 }
-                val fs = Repo.failures()
+                val fs = Repo.failures().filter { it.url.startsWith(IngestService.SCREENSHOT_PREFIX) == ss }
                 entries = es
                 failures = fs
             }
@@ -162,7 +214,10 @@ fun AppRoot(sharedUrl: String?, onSharedConsumed: () -> Unit) {
     Column(Modifier.fillMaxSize()) {
         Column(Modifier.padding(horizontal = 18.dp).padding(top = 10.dp, bottom = 4.dp)) {
             Text("Recall", color = Color.White, fontSize = 26.sp, fontWeight = FontWeight.ExtraBold)
-            Text("your video memory", color = Accent, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+            Text(
+                if (tab == Tab.Screenshots) "your screenshot memory" else "your video memory",
+                color = Accent, fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
+            )
         }
         if (activeCount > 0) {
             Text(
@@ -175,23 +230,24 @@ fun AppRoot(sharedUrl: String?, onSharedConsumed: () -> Unit) {
 
         Box(Modifier.weight(1f)) {
             when (tab) {
-                Tab.Library -> LibraryScreen(
+                Tab.Library, Tab.Screenshots -> LibraryScreen(
                     entries = entries,
                     failures = failures,
+                    screenshots = tab == Tab.Screenshots,
                     query = query,
                     onQuery = { query = it },
                     filterTopic = filterTopic,
                     onTopic = { filterTopic = it },
                     onOpen = { selected = it },
                     onRetry = { f ->
-                        // Leave the record + cached file; the service reuses the download and clears it on success.
+                        // Leave the record + cached media; the service reuses it and clears it on success.
                         IngestService.start(ctx, f.url)
                         refresh++
                     },
                     onDismiss = { f ->
                         scope.launch {
                             withContext(Dispatchers.IO) {
-                                if (f.mediaPath.isNotBlank()) runCatching { java.io.File(f.mediaPath).delete() }
+                                if (f.mediaPath.isNotBlank()) runCatching { java.io.File(f.mediaPath).deleteRecursively() }
                                 Repo.deleteFailure(f.id)
                             }
                             refresh++
@@ -221,7 +277,11 @@ private fun BottomBar(active: Tab, onSelect: (Tab) -> Unit) {
         Modifier.fillMaxWidth().background(Bg).padding(vertical = 6.dp),
     ) {
         for (t in Tab.values()) {
-            val label = if (t == Tab.Add) "+ Add" else t.name
+            val label = when (t) {
+                Tab.Add -> "+ Add"
+                Tab.Screenshots -> "Shots"
+                else -> t.name
+            }
             Box(
                 Modifier.weight(1f).clickable { onSelect(t) }.padding(vertical = 12.dp),
                 contentAlignment = Alignment.Center,
@@ -241,6 +301,7 @@ private fun BottomBar(active: Tab, onSelect: (Tab) -> Unit) {
 private fun LibraryScreen(
     entries: List<Entry>,
     failures: List<Failure>,
+    screenshots: Boolean,
     query: String,
     onQuery: (String) -> Unit,
     filterTopic: String?,
@@ -284,7 +345,11 @@ private fun LibraryScreen(
         if (entries.isEmpty() && failures.isEmpty()) {
             Box(Modifier.fillMaxSize().padding(30.dp), contentAlignment = Alignment.Center) {
                 Text(
-                    "Nothing saved yet.\nTap “+ Add”, paste a reel link, and Recall transcribes + summarizes it.",
+                    if (screenshots) {
+                        "No screenshots yet.\nShare a screenshot (or several) to Recall and it reads the text for you."
+                    } else {
+                        "Nothing saved yet.\nTap “+ Add”, paste a reel link, and Recall transcribes + summarizes it."
+                    },
                     color = Muted, fontSize = 14.sp,
                 )
             }
@@ -334,7 +399,10 @@ private fun FailureCard(f: Failure, onRetry: (Failure) -> Unit, onDismiss: (Fail
             .background(Color(0xFF241A1A), RoundedCornerShape(14.dp))
             .padding(14.dp),
     ) {
-        Text(f.url, color = Color(0xFFE0C0C0), fontSize = 12.sp, maxLines = 1)
+        Text(
+            if (f.url.startsWith(IngestService.SCREENSHOT_PREFIX)) "Screenshot capture" else f.url,
+            color = Color(0xFFE0C0C0), fontSize = 12.sp, maxLines = 1,
+        )
         Spacer(Modifier.height(4.dp))
         Text(f.error, color = Color(0xFFFF8A8A), fontSize = 12.sp, maxLines = 3)
         Spacer(Modifier.height(10.dp))
@@ -512,13 +580,15 @@ private fun DetailOverlay(entry: Entry, onClose: () -> Unit, onChanged: () -> Un
                 Text(entry.transcript, color = Color(0xFFAAAAB6), fontSize = 14.sp)
             }
 
-            Spacer(Modifier.height(18.dp))
-            Text(
-                "Open original →", color = Accent, fontSize = 14.sp, fontWeight = FontWeight.Bold,
-                modifier = Modifier.clickable {
-                    ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(entry.url)))
-                },
-            )
+            if (entry.source != "screenshot") {
+                Spacer(Modifier.height(18.dp))
+                Text(
+                    "Open original →", color = Accent, fontSize = 14.sp, fontWeight = FontWeight.Bold,
+                    modifier = Modifier.clickable {
+                        runCatching { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(entry.url))) }
+                    },
+                )
+            }
 
             Spacer(Modifier.height(22.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

@@ -15,7 +15,9 @@ import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.io.File
 import java.util.UUID
@@ -47,39 +49,55 @@ class IngestService : Service() {
         }
 
         ensureChannel()
-        startInForeground(startId, "Saving reel", "Starting…")
+        startInForeground(startId, "Recall", QUIRKY.first())
         IngestBus.active.value = IngestBus.active.value + 1
 
         scope.launch {
             val keptFile = failedAudioFile(this@IngestService, url)
             var producedFile: File? = null
+            val rotation = launch {
+                var i = 0
+                while (isActive) {
+                    progress(startId, QUIRKY[i % QUIRKY.size])
+                    delay(3500)
+                    i++
+                }
+            }
+            val isScreenshot = url.startsWith(SCREENSHOT_PREFIX)
+            val captureFolder = if (isScreenshot) captureDir(this@IngestService, url.removePrefix(SCREENSHOT_PREFIX)) else null
             try {
                 val key = Prefs.geminiKey(this@IngestService)
                 if (key.isBlank()) throw RuntimeException("Open Recall and add your Gemini key first.")
                 if (Repo.getByUrl(url) != null) {
-                    finalNotif(startId, "Already saved", "You saved this reel before.")
+                    finalNotif(startId, "Already saved", "You already saved this.")
                     return@launch
                 }
 
                 val model = Prefs.geminiModel(this@IngestService)
-                val caption = Downloader.fetchCaption(url)
+                val caption = if (isScreenshot) "" else Downloader.fetchCaption(url)
 
-                val analysis = if (detectSource(url) == "youtube") {
-                    progress(startId, "Analyzing with Gemini…")
-                    Gemini.analyzeYoutube(key, model, url, caption)
-                } else {
-                    val audioFile: File
-                    if (keptFile.exists() && keptFile.length() > 0) {
-                        progress(startId, "Retrying — using saved download…")
-                        audioFile = keptFile
-                    } else {
-                        progress(startId, "Downloading audio…")
-                        audioFile = Downloader.downloadAudioMp3(this@IngestService, url).file
+                val analysis = when {
+                    isScreenshot -> {
+                        val files = captureFolder?.listFiles()?.filter { it.length() > 0 }?.sortedBy { it.name } ?: emptyList()
+                        if (files.isEmpty()) throw RuntimeException("No screenshots found to read.")
+                        val images = files.map { f ->
+                            val mime = if (f.extension.equals("png", true)) "image/png" else "image/jpeg"
+                            Base64.encodeToString(f.readBytes(), Base64.NO_WRAP) to mime
+                        }
+                        Gemini.analyzeImages(key, model, images)
                     }
-                    producedFile = audioFile
-                    progress(startId, "Transcribing + summarizing…")
-                    val b64 = Base64.encodeToString(audioFile.readBytes(), Base64.NO_WRAP)
-                    Gemini.analyzeInlineAudio(key, model, b64, "audio/mp3", caption)
+                    detectSource(url) == "youtube" -> Gemini.analyzeYoutube(key, model, url, caption)
+                    else -> {
+                        val audioFile: File
+                        if (keptFile.exists() && keptFile.length() > 0) {
+                            audioFile = keptFile
+                        } else {
+                            audioFile = Downloader.downloadAudioMp3(this@IngestService, url).file
+                        }
+                        producedFile = audioFile
+                        val b64 = Base64.encodeToString(audioFile.readBytes(), Base64.NO_WRAP)
+                        Gemini.analyzeInlineAudio(key, model, b64, "audio/mp3", caption)
+                    }
                 }
 
                 Repo.save(
@@ -90,7 +108,7 @@ class IngestService : Service() {
                         transcript = analysis.transcript,
                         caption = caption,
                         url = url,
-                        source = detectSource(url),
+                        source = if (isScreenshot) "screenshot" else detectSource(url),
                         topic = analysis.topic,
                         subtags = analysis.subtags.joinToString(", "),
                         language = analysis.language,
@@ -101,27 +119,36 @@ class IngestService : Service() {
                 )
                 IngestBus.savedCount.value = IngestBus.savedCount.value + 1
                 Repo.deleteFailureByUrl(url)
-                keptFile.delete()
-                producedFile?.let { if (it.absolutePath != keptFile.absolutePath) it.delete() }
-                finalNotif(startId, "Saved to Recall ✓", analysis.title)
+                if (isScreenshot) {
+                    captureFolder?.deleteRecursively()
+                } else {
+                    keptFile.delete()
+                    producedFile?.let { if (it.absolutePath != keptFile.absolutePath) it.delete() }
+                }
+                finalNotif(startId, if (isScreenshot) "Saved screenshot ✓" else "Saved to Recall ✓", analysis.title)
             } catch (e: Throwable) {
                 val msg = e.message ?: "Something went wrong."
-                // Keep the downloaded audio so a retry reuses it instead of re-downloading.
+                // Keep the source media so a retry reuses it instead of re-fetching.
                 var media = ""
                 try {
-                    val pf = producedFile
-                    if (pf != null && pf.exists() && pf.length() > 0) {
-                        if (pf.absolutePath != keptFile.absolutePath) {
-                            keptFile.parentFile?.mkdirs()
-                            pf.copyTo(keptFile, overwrite = true)
+                    if (isScreenshot) {
+                        if (captureFolder?.exists() == true) media = captureFolder.absolutePath
+                    } else {
+                        val pf = producedFile
+                        if (pf != null && pf.exists() && pf.length() > 0) {
+                            if (pf.absolutePath != keptFile.absolutePath) {
+                                keptFile.parentFile?.mkdirs()
+                                pf.copyTo(keptFile, overwrite = true)
+                            }
+                            media = keptFile.absolutePath
                         }
-                        media = keptFile.absolutePath
                     }
                 } catch (_: Throwable) {
                 }
                 Repo.addFailure(stableId(url), url, msg, media)
                 finalNotif(startId, "Couldn't save — added to queue", "$msg\nOpen Recall to retry it.")
             } finally {
+                rotation.cancel()
                 IngestBus.changed.value = IngestBus.changed.value + 1
                 IngestBus.active.value = (IngestBus.active.value - 1).coerceAtLeast(0)
                 stopSelf(startId)
@@ -152,7 +179,7 @@ class IngestService : Service() {
 
     private fun buildNotif(title: String, text: String, ongoing: Boolean): Notification =
         NotificationCompat.Builder(this, CHANNEL)
-            .setSmallIcon(android.R.drawable.stat_sys_download)
+            .setSmallIcon(R.drawable.ic_notify)
             .setContentTitle(title)
             .setContentText(text)
             .setStyle(NotificationCompat.BigTextStyle().bigText(text))
@@ -179,12 +206,34 @@ class IngestService : Service() {
         const val EXTRA_URL = "url"
         private const val CHANNEL = "recall_ingest"
 
+        // Rotated in the notification while a save is in progress.
+        private val QUIRKY = listOf(
+            "Watching this so you don't have to…",
+            "Reading every word, even the fast-talkers…",
+            "Squeezing the juice out of this one…",
+            "Turning doomscroll into knowledge…",
+            "Summoning the summary…",
+            "Bottling the good bits…",
+            "Listening intently, nodding along…",
+            "Making this searchable for future you…",
+            "Decoding the algorithm's latest obsession…",
+            "Almost there, looking smart…",
+        )
+
+        const val SCREENSHOT_PREFIX = "screenshot:"
+
         fun start(ctx: Context, url: String) {
             ContextCompat.startForegroundService(
                 ctx,
                 Intent(ctx, IngestService::class.java).putExtra(EXTRA_URL, url),
             )
         }
+
+        // Folder where a screenshot capture's images are copied; persists until saved or dismissed.
+        fun captureDir(ctx: Context, captureId: String): File =
+            File(File(ctx.cacheDir, "captures").apply { mkdirs() }, captureId)
+
+        fun startScreenshot(ctx: Context, captureId: String) = start(ctx, "$SCREENSHOT_PREFIX$captureId")
 
         // Stable per-URL id so a re-failure reuses the same record/file (no orphans).
         fun stableId(url: String): String = Integer.toHexString(url.hashCode())
