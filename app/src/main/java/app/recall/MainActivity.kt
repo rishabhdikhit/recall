@@ -179,17 +179,25 @@ fun AppRoot(
             return@LaunchedEffect
         }
         var copied = 0
+        var lastErr: String? = null
         val captureId = withContext(Dispatchers.IO) {
             val id = java.util.UUID.randomUUID().toString()
             val dir = IngestService.captureDir(ctx, id)
             imgs.forEachIndexed { i, uri ->
-                runCatching {
+                try {
                     val mime = ctx.contentResolver.getType(uri) ?: "image/jpeg"
                     val ext = if (mime.contains("png")) "png" else "jpg"
-                    ctx.contentResolver.openInputStream(uri)?.use { input ->
-                        java.io.File(dir, "img_%03d.%s".format(i, ext)).outputStream().use { input.copyTo(it) }
+                    val stream = ctx.contentResolver.openInputStream(uri)
+                    if (stream == null) {
+                        lastErr = "no stream (${uri.scheme})"
+                    } else {
+                        stream.use { input ->
+                            java.io.File(dir, "img_%03d.%s".format(i, ext)).outputStream().use { input.copyTo(it) }
+                        }
                         copied++
                     }
+                } catch (e: Throwable) {
+                    lastErr = "${e.javaClass.simpleName}: ${e.message ?: ""}".take(120)
                 }
             }
             id
@@ -199,7 +207,7 @@ fun AppRoot(
             tab = Tab.Screenshots
             Toast.makeText(ctx, "Reading your screenshot(s) in the background…", Toast.LENGTH_LONG).show()
         } else {
-            Toast.makeText(ctx, "Couldn't read that image — try sharing it again", Toast.LENGTH_LONG).show()
+            Toast.makeText(ctx, "Couldn't read image — ${lastErr ?: "unknown"}", Toast.LENGTH_LONG).show()
         }
         // Consume LAST so this coroutine isn't cancelled mid-copy by the state change.
         onImagesConsumed()
