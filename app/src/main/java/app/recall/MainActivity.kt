@@ -119,13 +119,15 @@ fun AppRoot(sharedUrl: String?, onSharedConsumed: () -> Unit) {
     var query by remember { mutableStateOf("") }
     var filterTopic by remember { mutableStateOf<String?>(null) }
     var selected by remember { mutableStateOf<Entry?>(null) }
+    var failures by remember { mutableStateOf(listOf<Failure>()) }
     var refresh by remember { mutableStateOf(0) }
     var prefillUrl by remember { mutableStateOf<String?>(null) }
     val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
 
-    val savedCount by IngestBus.savedCount.collectAsState()
+    val changed by IngestBus.changed.collectAsState()
     val activeCount by IngestBus.active.collectAsState()
-    LaunchedEffect(savedCount) { if (savedCount > 0) refresh++ }
+    LaunchedEffect(changed) { refresh++ }
 
     // A shared reel: kick off the background save and let the user leave immediately.
     LaunchedEffect(sharedUrl) {
@@ -144,12 +146,15 @@ fun AppRoot(sharedUrl: String?, onSharedConsumed: () -> Unit) {
 
     LaunchedEffect(query, filterTopic, refresh, tab) {
         if (tab == Tab.Library) {
-            entries = withContext(Dispatchers.IO) {
-                when {
+            withContext(Dispatchers.IO) {
+                val es = when {
                     query.isNotBlank() -> Repo.search(query.trim())
                     filterTopic != null -> Repo.byTopic(filterTopic!!)
                     else -> Repo.all()
                 }
+                val fs = Repo.failures()
+                entries = es
+                failures = fs
             }
         }
     }
@@ -170,7 +175,28 @@ fun AppRoot(sharedUrl: String?, onSharedConsumed: () -> Unit) {
 
         Box(Modifier.weight(1f)) {
             when (tab) {
-                Tab.Library -> LibraryScreen(entries, query, { query = it }, filterTopic, { filterTopic = it }) { selected = it }
+                Tab.Library -> LibraryScreen(
+                    entries = entries,
+                    failures = failures,
+                    query = query,
+                    onQuery = { query = it },
+                    filterTopic = filterTopic,
+                    onTopic = { filterTopic = it },
+                    onOpen = { selected = it },
+                    onRetry = { f ->
+                        scope.launch {
+                            withContext(Dispatchers.IO) { Repo.deleteFailure(f.id) }
+                            IngestService.start(ctx, f.url)
+                            refresh++
+                        }
+                    },
+                    onDismiss = { f ->
+                        scope.launch {
+                            withContext(Dispatchers.IO) { Repo.deleteFailure(f.id) }
+                            refresh++
+                        }
+                    },
+                )
                 Tab.Add -> AddScreen(prefillUrl, { prefillUrl = null }) { refresh++; tab = Tab.Library }
                 Tab.Settings -> SettingsScreen()
             }
@@ -213,11 +239,14 @@ private fun BottomBar(active: Tab, onSelect: (Tab) -> Unit) {
 @Composable
 private fun LibraryScreen(
     entries: List<Entry>,
+    failures: List<Failure>,
     query: String,
     onQuery: (String) -> Unit,
     filterTopic: String?,
     onTopic: (String?) -> Unit,
     onOpen: (Entry) -> Unit,
+    onRetry: (Failure) -> Unit,
+    onDismiss: (Failure) -> Unit,
 ) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -251,7 +280,7 @@ private fun LibraryScreen(
             for (t in Gemini.TOPICS) Chip(t, filterTopic == t) { onTopic(t) }
         }
 
-        if (entries.isEmpty()) {
+        if (entries.isEmpty() && failures.isEmpty()) {
             Box(Modifier.fillMaxSize().padding(30.dp), contentAlignment = Alignment.Center) {
                 Text(
                     "Nothing saved yet.\nTap “+ Add”, paste a reel link, and Recall transcribes + summarizes it.",
@@ -260,6 +289,17 @@ private fun LibraryScreen(
             }
         } else {
             LazyColumn(Modifier.fillMaxSize().padding(horizontal = 14.dp)) {
+                if (failures.isNotEmpty()) {
+                    item {
+                        Text(
+                            "NEEDS ATTENTION",
+                            color = Color(0xFFFF6B6B), fontSize = 11.sp, fontWeight = FontWeight.ExtraBold,
+                            modifier = Modifier.padding(vertical = 6.dp),
+                        )
+                    }
+                    items(failures) { f -> FailureCard(f, onRetry, onDismiss) }
+                    item { Spacer(Modifier.height(10.dp)) }
+                }
                 items(entries) { e ->
                     Column(
                         Modifier.fillMaxWidth().padding(bottom = 10.dp)
@@ -282,6 +322,30 @@ private fun LibraryScreen(
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun FailureCard(f: Failure, onRetry: (Failure) -> Unit, onDismiss: (Failure) -> Unit) {
+    Column(
+        Modifier.fillMaxWidth().padding(bottom = 10.dp)
+            .background(Color(0xFF241A1A), RoundedCornerShape(14.dp))
+            .padding(14.dp),
+    ) {
+        Text(f.url, color = Color(0xFFE0C0C0), fontSize = 12.sp, maxLines = 1)
+        Spacer(Modifier.height(4.dp))
+        Text(f.error, color = Color(0xFFFF8A8A), fontSize = 12.sp, maxLines = 3)
+        Spacer(Modifier.height(10.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(
+                onClick = { onRetry(f) },
+                colors = ButtonDefaults.buttonColors(containerColor = Accent),
+            ) { Text("Retry", color = Color.White) }
+            Button(
+                onClick = { onDismiss(f) },
+                colors = ButtonDefaults.buttonColors(containerColor = FieldBg),
+            ) { Text("Dismiss", color = Color(0xFFDDDDE6)) }
         }
     }
 }

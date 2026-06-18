@@ -23,6 +23,9 @@ import java.util.UUID
 object IngestBus {
     val savedCount = MutableStateFlow(0)
     val active = MutableStateFlow(0)
+
+    // Bumped on every terminal outcome (saved / failed / duplicate) so the UI re-queries.
+    val changed = MutableStateFlow(0)
 }
 
 /**
@@ -85,10 +88,14 @@ class IngestService : Service() {
                     ),
                 )
                 IngestBus.savedCount.value = IngestBus.savedCount.value + 1
+                Repo.deleteFailureByUrl(url)
                 finalNotif(startId, "Saved to Recall ✓", analysis.title)
             } catch (e: Throwable) {
-                finalNotif(startId, "Couldn't save reel", e.message ?: "Something went wrong.")
+                val msg = e.message ?: "Something went wrong."
+                Repo.addFailure(UUID.randomUUID().toString(), url, msg)
+                finalNotif(startId, "Couldn't save — added to queue", "$msg\nOpen Recall to retry it.")
             } finally {
+                IngestBus.changed.value = IngestBus.changed.value + 1
                 IngestBus.active.value = (IngestBus.active.value - 1).coerceAtLeast(0)
                 stopSelf(startId)
             }

@@ -21,7 +21,23 @@ data class Entry(
     val starred: Int,
 )
 
-private class DbHelper(ctx: Context) : SQLiteOpenHelper(ctx, "recall.db", null, 1) {
+data class Failure(
+    val id: String,
+    val url: String,
+    val error: String,
+    val createdAt: Long,
+)
+
+private const val FAILURES_DDL = """
+    CREATE TABLE IF NOT EXISTS failures (
+      id TEXT PRIMARY KEY NOT NULL,
+      url TEXT NOT NULL UNIQUE,
+      error TEXT NOT NULL DEFAULT '',
+      createdAt INTEGER NOT NULL
+    )
+"""
+
+private class DbHelper(ctx: Context) : SQLiteOpenHelper(ctx, "recall.db", null, 2) {
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
             """
@@ -43,9 +59,12 @@ private class DbHelper(ctx: Context) : SQLiteOpenHelper(ctx, "recall.db", null, 
         )
         db.execSQL("CREATE INDEX idx_topic ON entries(topic)")
         db.execSQL("CREATE INDEX idx_created ON entries(createdAt)")
+        db.execSQL(FAILURES_DDL.trimIndent())
     }
 
-    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {}
+    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+        if (oldVersion < 2) db.execSQL(FAILURES_DDL.trimIndent())
+    }
 }
 
 object Repo {
@@ -126,5 +145,42 @@ object Repo {
     fun setStar(id: String, starred: Int) {
         val cv = ContentValues().apply { put("starred", starred) }
         helper.writableDatabase.update("entries", cv, "id = ?", arrayOf(id))
+    }
+
+    // --- Failed-ingest queue ---
+
+    fun addFailure(id: String, url: String, error: String) {
+        val cv = ContentValues().apply {
+            put("id", id)
+            put("url", url)
+            put("error", error)
+            put("createdAt", System.currentTimeMillis())
+        }
+        helper.writableDatabase.insertWithOnConflict("failures", null, cv, SQLiteDatabase.CONFLICT_REPLACE)
+    }
+
+    fun failures(): List<Failure> {
+        val list = ArrayList<Failure>()
+        helper.readableDatabase.rawQuery("SELECT * FROM failures ORDER BY createdAt DESC", null).use { c ->
+            while (c.moveToNext()) {
+                list.add(
+                    Failure(
+                        id = c.getString(c.getColumnIndexOrThrow("id")),
+                        url = c.getString(c.getColumnIndexOrThrow("url")),
+                        error = c.getString(c.getColumnIndexOrThrow("error")),
+                        createdAt = c.getLong(c.getColumnIndexOrThrow("createdAt")),
+                    ),
+                )
+            }
+        }
+        return list
+    }
+
+    fun deleteFailure(id: String) {
+        helper.writableDatabase.delete("failures", "id = ?", arrayOf(id))
+    }
+
+    fun deleteFailureByUrl(url: String) {
+        helper.writableDatabase.delete("failures", "url = ?", arrayOf(url))
     }
 }
