@@ -27,6 +27,7 @@ data class Failure(
     val url: String,
     val error: String,
     val createdAt: Long,
+    val mediaPath: String,
 )
 
 private const val FAILURES_DDL = """
@@ -38,7 +39,7 @@ private const val FAILURES_DDL = """
     )
 """
 
-private class DbHelper(ctx: Context) : SQLiteOpenHelper(ctx, "recall.db", null, 3) {
+private class DbHelper(ctx: Context) : SQLiteOpenHelper(ctx, "recall.db", null, 4) {
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
             """
@@ -61,12 +62,23 @@ private class DbHelper(ctx: Context) : SQLiteOpenHelper(ctx, "recall.db", null, 
         )
         db.execSQL("CREATE INDEX idx_topic ON entries(topic)")
         db.execSQL("CREATE INDEX idx_created ON entries(createdAt)")
-        db.execSQL(FAILURES_DDL.trimIndent())
+        db.execSQL(
+            """
+            CREATE TABLE failures (
+              id TEXT PRIMARY KEY NOT NULL,
+              url TEXT NOT NULL UNIQUE,
+              error TEXT NOT NULL DEFAULT '',
+              createdAt INTEGER NOT NULL,
+              mediaPath TEXT NOT NULL DEFAULT ''
+            )
+            """.trimIndent(),
+        )
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         if (oldVersion < 2) db.execSQL(FAILURES_DDL.trimIndent())
         if (oldVersion < 3) db.execSQL("ALTER TABLE entries ADD COLUMN caption TEXT NOT NULL DEFAULT ''")
+        if (oldVersion < 4) db.execSQL("ALTER TABLE failures ADD COLUMN mediaPath TEXT NOT NULL DEFAULT ''")
     }
 }
 
@@ -154,12 +166,13 @@ object Repo {
 
     // --- Failed-ingest queue ---
 
-    fun addFailure(id: String, url: String, error: String) {
+    fun addFailure(id: String, url: String, error: String, mediaPath: String) {
         val cv = ContentValues().apply {
             put("id", id)
             put("url", url)
             put("error", error)
             put("createdAt", System.currentTimeMillis())
+            put("mediaPath", mediaPath)
         }
         helper.writableDatabase.insertWithOnConflict("failures", null, cv, SQLiteDatabase.CONFLICT_REPLACE)
     }
@@ -174,6 +187,7 @@ object Repo {
                         url = c.getString(c.getColumnIndexOrThrow("url")),
                         error = c.getString(c.getColumnIndexOrThrow("error")),
                         createdAt = c.getLong(c.getColumnIndexOrThrow("createdAt")),
+                        mediaPath = c.getString(c.getColumnIndexOrThrow("mediaPath")),
                     ),
                 )
             }

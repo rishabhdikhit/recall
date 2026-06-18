@@ -17,6 +17,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
+import java.io.File
 import java.util.UUID
 
 /** Lets the UI react when a background ingest finishes. */
@@ -50,6 +51,8 @@ class IngestService : Service() {
         IngestBus.active.value = IngestBus.active.value + 1
 
         scope.launch {
+            val keptFile = failedAudioFile(this@IngestService, url)
+            var producedFile: File? = null
             try {
                 val key = Prefs.geminiKey(this@IngestService)
                 if (key.isBlank()) throw RuntimeException("Open Recall and add your Gemini key first.")
@@ -65,13 +68,18 @@ class IngestService : Service() {
                     progress(startId, "Analyzing with Gemini…")
                     Gemini.analyzeYoutube(key, model, url, caption)
                 } else {
-                    progress(startId, "Downloading audio…")
-                    val audio = Downloader.downloadAudioMp3(this@IngestService, url)
+                    val audioFile: File
+                    if (keptFile.exists() && keptFile.length() > 0) {
+                        progress(startId, "Retrying — using saved download…")
+                        audioFile = keptFile
+                    } else {
+                        progress(startId, "Downloading audio…")
+                        audioFile = Downloader.downloadAudioMp3(this@IngestService, url).file
+                    }
+                    producedFile = audioFile
                     progress(startId, "Transcribing + summarizing…")
-                    val b64 = Base64.encodeToString(audio.file.readBytes(), Base64.NO_WRAP)
-                    val a = Gemini.analyzeInlineAudio(key, model, b64, audio.mimeType, caption)
-                    audio.file.delete()
-                    a
+                    val b64 = Base64.encodeToString(audioFile.readBytes(), Base64.NO_WRAP)
+                    Gemini.analyzeInlineAudio(key, model, b64, "audio/mp3", caption)
                 }
 
                 Repo.save(
@@ -93,10 +101,25 @@ class IngestService : Service() {
                 )
                 IngestBus.savedCount.value = IngestBus.savedCount.value + 1
                 Repo.deleteFailureByUrl(url)
+                keptFile.delete()
+                producedFile?.let { if (it.absolutePath != keptFile.absolutePath) it.delete() }
                 finalNotif(startId, "Saved to Recall ✓", analysis.title)
             } catch (e: Throwable) {
                 val msg = e.message ?: "Something went wrong."
-                Repo.addFailure(UUID.randomUUID().toString(), url, msg)
+                // Keep the downloaded audio so a retry reuses it instead of re-downloading.
+                var media = ""
+                try {
+                    val pf = producedFile
+                    if (pf != null && pf.exists() && pf.length() > 0) {
+                        if (pf.absolutePath != keptFile.absolutePath) {
+                            keptFile.parentFile?.mkdirs()
+                            pf.copyTo(keptFile, overwrite = true)
+                        }
+                        media = keptFile.absolutePath
+                    }
+                } catch (_: Throwable) {
+                }
+                Repo.addFailure(stableId(url), url, msg, media)
                 finalNotif(startId, "Couldn't save — added to queue", "$msg\nOpen Recall to retry it.")
             } finally {
                 IngestBus.changed.value = IngestBus.changed.value + 1
@@ -162,5 +185,12 @@ class IngestService : Service() {
                 Intent(ctx, IngestService::class.java).putExtra(EXTRA_URL, url),
             )
         }
+
+        // Stable per-URL id so a re-failure reuses the same record/file (no orphans).
+        fun stableId(url: String): String = Integer.toHexString(url.hashCode())
+
+        // Where a failed download is parked for retry (outside the wiped-each-run dl/ folder).
+        fun failedAudioFile(ctx: Context, url: String): File =
+            File(File(ctx.cacheDir, "failed").apply { mkdirs() }, "${stableId(url)}.mp3")
     }
 }

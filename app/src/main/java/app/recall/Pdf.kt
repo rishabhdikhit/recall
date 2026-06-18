@@ -69,6 +69,8 @@ object Pdf {
         doc.finishPage(page)
 
         val dir = File(context.cacheDir, "pdf").apply { mkdirs() }
+        // Keep only the most recent export — old PDFs are just transient share artifacts.
+        dir.listFiles()?.forEach { it.delete() }
         val file = File(dir, "recall_${System.currentTimeMillis()}.pdf")
         FileOutputStream(file).use { doc.writeTo(it) }
         doc.close()

@@ -184,15 +184,16 @@ fun AppRoot(sharedUrl: String?, onSharedConsumed: () -> Unit) {
                     onTopic = { filterTopic = it },
                     onOpen = { selected = it },
                     onRetry = { f ->
-                        scope.launch {
-                            withContext(Dispatchers.IO) { Repo.deleteFailure(f.id) }
-                            IngestService.start(ctx, f.url)
-                            refresh++
-                        }
+                        // Leave the record + cached file; the service reuses the download and clears it on success.
+                        IngestService.start(ctx, f.url)
+                        refresh++
                     },
                     onDismiss = { f ->
                         scope.launch {
-                            withContext(Dispatchers.IO) { Repo.deleteFailure(f.id) }
+                            withContext(Dispatchers.IO) {
+                                if (f.mediaPath.isNotBlank()) runCatching { java.io.File(f.mediaPath).delete() }
+                                Repo.deleteFailure(f.id)
+                            }
                             refresh++
                         }
                     },
