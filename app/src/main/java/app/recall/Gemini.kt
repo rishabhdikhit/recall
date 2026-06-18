@@ -64,6 +64,10 @@ object Gemini {
             )
     }
 
+    // Gemini's servers return 503/UNAVAILABLE when the model is overloaded, and 429 when
+    // rate-limited. Both are transient — retry with backoff so the user just sees it succeed.
+    private val BACKOFF_MS = longArrayOf(2_000, 5_000, 12_000, 25_000)
+
     private fun run(apiKey: String, mediaPart: JSONObject): Analysis {
         val parts = JSONArray().put(mediaPart).put(JSONObject().put("text", PROMPT))
         val contents = JSONArray().put(JSONObject().put("parts", parts))
@@ -78,34 +82,44 @@ object Gemini {
             .post(body.toString().toRequestBody("application/json".toMediaType()))
             .build()
 
-        client.newCall(request).execute().use { resp ->
-            val respBody = resp.body?.string() ?: ""
-            if (!resp.isSuccessful) {
-                if (resp.code == 400 && respBody.contains("API key not valid")) {
-                    throw RuntimeException("Your Gemini API key is invalid.")
-                }
-                if (resp.code == 429) {
-                    throw RuntimeException("Rate limit hit on your Gemini key — wait a minute.")
-                }
-                throw RuntimeException("Gemini ${resp.code}: ${respBody.take(200)}")
+        var attempt = 0
+        while (true) {
+            val (code, respBody) = client.newCall(request).execute().use { it.code to (it.body?.string() ?: "") }
+            if (code in 200..299) return parseAnalysis(respBody)
+
+            val retryable = code == 429 || code == 500 || code == 503
+            if (retryable && attempt < BACKOFF_MS.size) {
+                Thread.sleep(BACKOFF_MS[attempt])
+                attempt++
+                continue
             }
-            val json = JSONObject(respBody)
-            val text = json.getJSONArray("candidates").getJSONObject(0)
-                .getJSONObject("content").getJSONArray("parts").getJSONObject(0)
-                .getString("text")
-            val o = JSONObject(text)
-            val tagsArr = o.optJSONArray("subtags") ?: JSONArray()
-            val tags = (0 until tagsArr.length()).map { tagsArr.getString(it) }
-            return Analysis(
-                title = o.optString("title"),
-                summary = o.optString("summary"),
-                transcript = o.optString("transcript"),
-                topic = o.optString("topic", "Other"),
-                subtags = tags,
-                language = o.optString("language"),
-                hasSpeech = o.optBoolean("hasSpeech", true),
-            )
+
+            if (code == 400 && respBody.contains("API key not valid")) {
+                throw RuntimeException("Your Gemini API key is invalid.")
+            }
+            if (code == 503) throw RuntimeException("Gemini is overloaded right now — try this reel again in a minute.")
+            if (code == 429) throw RuntimeException("Your Gemini key hit its rate limit — wait a minute and retry.")
+            throw RuntimeException("Gemini $code: ${respBody.take(180)}")
         }
+    }
+
+    private fun parseAnalysis(respBody: String): Analysis {
+        val json = JSONObject(respBody)
+        val text = json.getJSONArray("candidates").getJSONObject(0)
+            .getJSONObject("content").getJSONArray("parts").getJSONObject(0)
+            .getString("text")
+        val o = JSONObject(text)
+        val tagsArr = o.optJSONArray("subtags") ?: JSONArray()
+        val tags = (0 until tagsArr.length()).map { tagsArr.getString(it) }
+        return Analysis(
+            title = o.optString("title"),
+            summary = o.optString("summary"),
+            transcript = o.optString("transcript"),
+            topic = o.optString("topic", "Other"),
+            subtags = tags,
+            language = o.optString("language"),
+            hasSpeech = o.optBoolean("hasSpeech", true),
+        )
     }
 
     /** YouTube: Gemini ingests the URL directly, no download needed. */
