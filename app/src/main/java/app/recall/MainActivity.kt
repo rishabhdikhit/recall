@@ -1,12 +1,15 @@
 package app.recall
 
+import android.Manifest
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
-import android.util.Base64
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -37,6 +40,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -57,7 +61,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.util.UUID
 
 private val Bg = Color(0xFF0E0E12)
 private val CardBg = Color(0xFF16161D)
@@ -77,9 +80,13 @@ private fun firstUrl(text: String?): String? =
 
 class MainActivity : ComponentActivity() {
     private var sharedUrl by mutableStateOf<String?>(null)
+    private val notifPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            notifPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
         sharedUrl = sharedFrom(intent)
         setContent {
             MaterialTheme(colorScheme = darkColorScheme(background = Bg, surface = Bg, primary = Accent)) {
@@ -114,13 +121,24 @@ fun AppRoot(sharedUrl: String?, onSharedConsumed: () -> Unit) {
     var selected by remember { mutableStateOf<Entry?>(null) }
     var refresh by remember { mutableStateOf(0) }
     var prefillUrl by remember { mutableStateOf<String?>(null) }
+    val ctx = LocalContext.current
 
-    // A shared reel jumps straight to the Add tab, prefilled.
+    val savedCount by IngestBus.savedCount.collectAsState()
+    val activeCount by IngestBus.active.collectAsState()
+    LaunchedEffect(savedCount) { if (savedCount > 0) refresh++ }
+
+    // A shared reel: kick off the background save and let the user leave immediately.
     LaunchedEffect(sharedUrl) {
-        if (sharedUrl != null) {
-            prefillUrl = sharedUrl
+        val u = sharedUrl ?: return@LaunchedEffect
+        onSharedConsumed()
+        if (Prefs.geminiKey(ctx).isBlank()) {
+            prefillUrl = u
             tab = Tab.Add
-            onSharedConsumed()
+            Toast.makeText(ctx, "Add your Gemini key first", Toast.LENGTH_LONG).show()
+        } else {
+            IngestService.start(ctx, u)
+            tab = Tab.Library
+            Toast.makeText(ctx, "Saving in background — you can switch back to Instagram", Toast.LENGTH_LONG).show()
         }
     }
 
@@ -140,6 +158,14 @@ fun AppRoot(sharedUrl: String?, onSharedConsumed: () -> Unit) {
         Column(Modifier.padding(horizontal = 18.dp).padding(top = 10.dp, bottom = 4.dp)) {
             Text("Recall", color = Color.White, fontSize = 26.sp, fontWeight = FontWeight.ExtraBold)
             Text("your video memory", color = Accent, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+        }
+        if (activeCount > 0) {
+            Text(
+                "● Saving $activeCount in background…",
+                color = Accent,
+                fontSize = 12.sp,
+                modifier = Modifier.padding(horizontal = 18.dp).padding(bottom = 6.dp),
+            )
         }
 
         Box(Modifier.weight(1f)) {
@@ -265,9 +291,7 @@ private fun AddScreen(prefillUrl: String?, onPrefillConsumed: () -> Unit, onSave
     val ctx = LocalContext.current
     val clipboard = LocalClipboardManager.current
     var url by remember { mutableStateOf("") }
-    var stage by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
-    val scope = rememberCoroutineScope()
 
     LaunchedEffect(prefillUrl) {
         if (prefillUrl != null) {
@@ -280,7 +304,7 @@ private fun AddScreen(prefillUrl: String?, onPrefillConsumed: () -> Unit, onSave
         Text("Add a video", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.ExtraBold)
         Spacer(Modifier.height(6.dp))
         Text(
-            "Paste an Instagram reel or YouTube link. yt-dlp grabs the audio on your phone and Gemini transcribes + summarizes it.",
+            "Paste an Instagram reel or YouTube link — or just Share a reel from Instagram into Recall. It saves in the background, so you can keep scrolling.",
             color = Muted, fontSize = 13.sp,
         )
         Spacer(Modifier.height(14.dp))
@@ -297,81 +321,32 @@ private fun AddScreen(prefillUrl: String?, onPrefillConsumed: () -> Unit, onSave
                 onClick = {
                     error = null
                     val link = url.trim()
-                    val key = Prefs.geminiKey(ctx)
                     when {
                         link.isBlank() -> error = "Paste a link first."
-                        key.isBlank() -> error = "Add your Gemini key in Settings first."
-                        else -> scope.launch {
-                            try {
-                                if (Repo.getByUrl(link) != null) {
-                                    error = "You already saved this one."
-                                    return@launch
-                                }
-                                stage = "Starting…"
-                                val a = if (detectSource(link) == "youtube") {
-                                    stage = "Analyzing with Gemini…"
-                                    withContext(Dispatchers.IO) { Gemini.analyzeYoutube(key, link) }
-                                } else {
-                                    stage = "Downloading audio…"
-                                    val audio = withContext(Dispatchers.IO) { Downloader.downloadAudioMp3(ctx, link) }
-                                    stage = "Encoding…"
-                                    val b64 = withContext(Dispatchers.IO) {
-                                        Base64.encodeToString(audio.file.readBytes(), Base64.NO_WRAP)
-                                    }
-                                    stage = "Analyzing with Gemini…"
-                                    val res = withContext(Dispatchers.IO) {
-                                        Gemini.analyzeInlineAudio(key, b64, audio.mimeType)
-                                    }
-                                    audio.file.delete()
-                                    res
-                                }
-                                stage = "Saving…"
-                                withContext(Dispatchers.IO) {
-                                    Repo.save(
-                                        Entry(
-                                            id = UUID.randomUUID().toString(),
-                                            title = a.title,
-                                            summary = a.summary,
-                                            transcript = a.transcript,
-                                            url = link,
-                                            source = detectSource(link),
-                                            topic = a.topic,
-                                            subtags = a.subtags.joinToString(", "),
-                                            language = a.language,
-                                            hasSpeech = if (a.hasSpeech) 1 else 0,
-                                            createdAt = System.currentTimeMillis(),
-                                            starred = 0,
-                                        ),
-                                    )
-                                }
-                                stage = null
-                                url = ""
-                                onSaved()
-                            } catch (e: Throwable) {
-                                stage = null
-                                error = e.message ?: "Something went wrong."
-                            }
+                        Prefs.geminiKey(ctx).isBlank() -> error = "Add your Gemini key in Settings first."
+                        else -> {
+                            IngestService.start(ctx, link)
+                            url = ""
+                            Toast.makeText(ctx, "Saving in background — check your notifications", Toast.LENGTH_LONG).show()
+                            onSaved()
                         }
                     }
                 },
-                enabled = stage == null,
                 colors = ButtonDefaults.buttonColors(containerColor = Accent),
                 modifier = Modifier.weight(2f),
-            ) { Text(if (stage != null) "Working…" else "Analyze & Save", color = Color.White) }
+            ) { Text("Save", color = Color.White) }
         }
 
-        stage?.let {
-            Spacer(Modifier.height(16.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                CircularProgressIndicator(color = Accent, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(10.dp))
-                Text(it, color = Color(0xFFCCCCD6), fontSize = 14.sp)
-            }
-        }
         error?.let {
             Spacer(Modifier.height(16.dp))
             Text(it, color = Color(0xFFFF6B6B), fontSize = 14.sp)
         }
+
+        Spacer(Modifier.height(24.dp))
+        Text(
+            "Public reels only. Instagram occasionally blocks a fetch — if one fails you'll get a notification, just try another.",
+            color = Muted, fontSize = 12.sp,
+        )
     }
 }
 
