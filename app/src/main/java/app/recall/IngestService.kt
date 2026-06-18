@@ -231,7 +231,7 @@ class IngestService : Service() {
 
         // Folder where a screenshot capture's images are copied; persists until saved or dismissed.
         fun captureDir(ctx: Context, captureId: String): File =
-            File(File(ctx.cacheDir, "captures").apply { mkdirs() }, captureId)
+            File(ctx.cacheDir, "captures/$captureId").apply { mkdirs() }
 
         fun startScreenshot(ctx: Context, captureId: String) = start(ctx, "$SCREENSHOT_PREFIX$captureId")
 
