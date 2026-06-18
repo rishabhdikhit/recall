@@ -28,6 +28,9 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -38,6 +41,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -52,6 +56,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -132,6 +137,95 @@ class MainActivity : ComponentActivity() {
 
 private enum class Tab { Library, Screenshots, Add, Settings }
 
+private data class Slide(val title: String, val body: String, val mono: String? = null, val monoTitle: Boolean = false)
+
+private val ONBOARDING = listOf(
+    Slide(
+        title = "RECALL ONLINE",
+        body = "Your second brain for everything worth remembering.",
+        mono = "> MEMORY CORE ONLINE",
+        monoTitle = true,
+    ),
+    Slide(
+        title = "Never lose a great find",
+        body = "Share a reel, video, or screenshot. Recall understands it, organizes it, and remembers it.",
+    ),
+    Slide(
+        title = "Share to save",
+        body = "On Instagram or YouTube, tap Share → Recall. Keep scrolling while Recall does the work.",
+        mono = "  Instagram / YouTube\n          ↓\n        Share\n          ↓\n        Recall",
+    ),
+    Slide(
+        title = "Screenshot anything",
+        body = "One screenshot or ten. Recall reads every word and makes it searchable later.",
+    ),
+    Slide(
+        title = "Ready to remember everything?",
+        body = "Connect your free Gemini API key and start building your second brain in under a minute.",
+    ),
+)
+
+@Composable
+private fun OnboardingOverlay(onFinish: () -> Unit) {
+    val pager = rememberPagerState(pageCount = { ONBOARDING.size })
+    val scope = rememberCoroutineScope()
+    val last = pager.currentPage == ONBOARDING.lastIndex
+
+    Surface(Modifier.fillMaxSize(), color = Bg) {
+        Column(Modifier.fillMaxSize().padding(24.dp)) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                TextButton(onClick = onFinish) { Text("Skip", color = Muted) }
+            }
+
+            HorizontalPager(state = pager, modifier = Modifier.weight(1f)) { page ->
+                val s = ONBOARDING[page]
+                Column(
+                    Modifier.fillMaxSize().padding(horizontal = 6.dp),
+                    verticalArrangement = Arrangement.Center,
+                ) {
+                    if (s.mono != null && s.monoTitle) {
+                        Text(s.mono, color = Accent, fontSize = 13.sp, fontFamily = FontFamily.Monospace)
+                        Spacer(Modifier.height(18.dp))
+                    }
+                    Text(
+                        s.title,
+                        color = Color.White,
+                        fontSize = 30.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        fontFamily = if (s.monoTitle) FontFamily.Monospace else FontFamily.Default,
+                    )
+                    Spacer(Modifier.height(14.dp))
+                    Text(s.body, color = Color(0xFFB8B8C6), fontSize = 16.sp, lineHeight = 24.sp)
+                    if (s.mono != null && !s.monoTitle) {
+                        Spacer(Modifier.height(22.dp))
+                        Text(s.mono, color = Accent, fontSize = 14.sp, fontFamily = FontFamily.Monospace, lineHeight = 20.sp)
+                    }
+                }
+            }
+
+            Row(Modifier.fillMaxWidth().padding(vertical = 18.dp), horizontalArrangement = Arrangement.Center) {
+                repeat(ONBOARDING.size) { i ->
+                    Box(
+                        Modifier.padding(horizontal = 4.dp)
+                            .size(if (i == pager.currentPage) 10.dp else 7.dp)
+                            .background(if (i == pager.currentPage) Accent else FieldBg, CircleShape),
+                    )
+                }
+            }
+
+            Button(
+                onClick = {
+                    if (last) onFinish() else scope.launch { pager.animateScrollToPage(pager.currentPage + 1) }
+                },
+                colors = ButtonDefaults.buttonColors(containerColor = Accent),
+                modifier = Modifier.fillMaxWidth().height(52.dp),
+            ) {
+                Text(if (last) "Get Started" else "Next", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+            }
+        }
+    }
+}
+
 @Composable
 fun AppRoot(
     sharedUrl: String?,
@@ -149,6 +243,7 @@ fun AppRoot(
     var prefillUrl by remember { mutableStateOf<String?>(null) }
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
+    var showOnboarding by remember { mutableStateOf(!Prefs.onboardingDone(ctx)) }
 
     val changed by IngestBus.changed.collectAsState()
     val activeCount by IngestBus.active.collectAsState()
@@ -273,7 +368,7 @@ fun AppRoot(
                     },
                 )
                 Tab.Add -> AddScreen(prefillUrl, { prefillUrl = null }) { refresh++; tab = Tab.Library }
-                Tab.Settings -> SettingsScreen()
+                Tab.Settings -> SettingsScreen(onReplayOnboarding = { showOnboarding = true })
             }
         }
 
@@ -286,6 +381,14 @@ fun AppRoot(
             onClose = { selected = null },
             onChanged = { selected = null; refresh++ },
         )
+    }
+
+    if (showOnboarding) {
+        OnboardingOverlay(onFinish = {
+            Prefs.setOnboardingDone(ctx)
+            showOnboarding = false
+            tab = Tab.Settings
+        })
     }
 }
 
@@ -502,7 +605,7 @@ private fun AddScreen(prefillUrl: String?, onPrefillConsumed: () -> Unit, onSave
 }
 
 @Composable
-private fun SettingsScreen() {
+private fun SettingsScreen(onReplayOnboarding: () -> Unit) {
     val ctx = LocalContext.current
     var key by remember { mutableStateOf(Prefs.geminiKey(ctx)) }
     var saved by remember { mutableStateOf(false) }
@@ -560,6 +663,13 @@ private fun SettingsScreen() {
                 if (isSelected) Text("✓", color = Accent, fontWeight = FontWeight.Bold)
             }
         }
+
+        Spacer(Modifier.height(28.dp))
+        Text(
+            "How it works",
+            color = Accent, fontSize = 14.sp, fontWeight = FontWeight.Bold,
+            modifier = Modifier.clickable { onReplayOnboarding() },
+        )
     }
 }
 

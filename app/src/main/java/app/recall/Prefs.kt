@@ -6,6 +6,7 @@ object Prefs {
     private const val FILE = "recall_prefs"
     private const val KEY_GEMINI = "gemini_key"
     private const val KEY_MODEL = "gemini_model"
+    private const val KEY_ONBOARDED = "onboarding_done"
 
     private fun sp(ctx: Context) = ctx.getSharedPreferences(FILE, Context.MODE_PRIVATE)
 
@@ -20,5 +21,11 @@ object Prefs {
 
     fun setGeminiModel(ctx: Context, value: String) {
         sp(ctx).edit().putString(KEY_MODEL, value).apply()
+    }
+
+    fun onboardingDone(ctx: Context): Boolean = sp(ctx).getBoolean(KEY_ONBOARDED, false)
+
+    fun setOnboardingDone(ctx: Context) {
+        sp(ctx).edit().putBoolean(KEY_ONBOARDED, true).apply()
     }
 }
