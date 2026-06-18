@@ -10,6 +10,7 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.IntentCompat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -117,12 +118,13 @@ class MainActivity : ComponentActivity() {
         return null
     }
 
-    @Suppress("DEPRECATION")
     private fun sharedImagesFrom(intent: Intent?): List<Uri>? {
         if (intent == null || intent.type?.startsWith("image/") != true) return null
         return when (intent.action) {
-            Intent.ACTION_SEND -> intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)?.let { listOf(it) }
-            Intent.ACTION_SEND_MULTIPLE -> intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM)?.toList()
+            Intent.ACTION_SEND ->
+                IntentCompat.getParcelableExtra(intent, Intent.EXTRA_STREAM, Uri::class.java)?.let { listOf(it) }
+            Intent.ACTION_SEND_MULTIPLE ->
+                IntentCompat.getParcelableArrayListExtra(intent, Intent.EXTRA_STREAM, Uri::class.java)
             else -> null
         }
     }
@@ -170,12 +172,13 @@ fun AppRoot(
     // Shared screenshot(s): copy them into a capture folder and process in the background.
     LaunchedEffect(sharedImages) {
         val imgs = sharedImages ?: return@LaunchedEffect
-        onImagesConsumed()
         if (Prefs.geminiKey(ctx).isBlank()) {
+            onImagesConsumed()
             tab = Tab.Settings
             Toast.makeText(ctx, "Add your Gemini key first", Toast.LENGTH_LONG).show()
             return@LaunchedEffect
         }
+        var copied = 0
         val captureId = withContext(Dispatchers.IO) {
             val id = java.util.UUID.randomUUID().toString()
             val dir = IngestService.captureDir(ctx, id)
@@ -185,14 +188,21 @@ fun AppRoot(
                     val ext = if (mime.contains("png")) "png" else "jpg"
                     ctx.contentResolver.openInputStream(uri)?.use { input ->
                         java.io.File(dir, "img_%03d.%s".format(i, ext)).outputStream().use { input.copyTo(it) }
+                        copied++
                     }
                 }
             }
             id
         }
-        IngestService.startScreenshot(ctx, captureId)
-        tab = Tab.Screenshots
-        Toast.makeText(ctx, "Reading your screenshot(s) in the background…", Toast.LENGTH_LONG).show()
+        if (copied > 0) {
+            IngestService.startScreenshot(ctx, captureId)
+            tab = Tab.Screenshots
+            Toast.makeText(ctx, "Reading your screenshot(s) in the background…", Toast.LENGTH_LONG).show()
+        } else {
+            Toast.makeText(ctx, "Couldn't read that image — try sharing it again", Toast.LENGTH_LONG).show()
+        }
+        // Consume LAST so this coroutine isn't cancelled mid-copy by the state change.
+        onImagesConsumed()
     }
 
     LaunchedEffect(query, filterTopic, refresh, tab) {
