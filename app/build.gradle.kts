@@ -12,8 +12,8 @@ android {
         applicationId = "app.recall"
         minSdk = 24
         targetSdk = 35
-        versionCode = 3
-        versionName = "1.0.2"
+        versionCode = 4
+        versionName = "1.1.0"
         ndk {
             // Real phones only — keeps the embedded-Python APK from ballooning.
             abiFilters += listOf("arm64-v8a", "armeabi-v7a")

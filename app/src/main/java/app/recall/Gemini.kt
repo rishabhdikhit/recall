@@ -19,7 +19,17 @@ data class Analysis(
 )
 
 object Gemini {
-    private const val MODEL = "gemini-2.5-flash"
+    const val DEFAULT_MODEL = "gemini-2.5-flash"
+
+    // (label, model id). Curated, stable IDs — no custom field, so a renamed model needs an app update.
+    val MODELS = listOf(
+        "Gemini 3.5 Flash" to "gemini-3.5-flash",
+        "Gemini 3.1 Pro" to "gemini-3.1-pro",
+        "Gemini 3.1 Flash" to "gemini-3.1-flash",
+        "Gemini 3.1 Flash-Lite" to "gemini-3.1-flash-lite",
+        "Gemini 2.5 Flash" to "gemini-2.5-flash",
+        "Gemini 2.5 Flash-Lite" to "gemini-2.5-flash-lite",
+    )
 
     val TOPICS = listOf(
         "Tech", "Programming", "AI & ML", "Business", "Finance",
@@ -68,8 +78,13 @@ object Gemini {
     // rate-limited. Both are transient — retry with backoff so the user just sees it succeed.
     private val BACKOFF_MS = longArrayOf(2_000, 5_000, 12_000, 25_000)
 
-    private fun run(apiKey: String, mediaPart: JSONObject): Analysis {
-        val parts = JSONArray().put(mediaPart).put(JSONObject().put("text", PROMPT))
+    private fun run(apiKey: String, model: String, mediaPart: JSONObject, caption: String): Analysis {
+        val promptText = if (caption.isNotBlank()) {
+            "$PROMPT\n\nThe author's caption (use as context — it often holds the key info, links or steps):\n$caption"
+        } else {
+            PROMPT
+        }
+        val parts = JSONArray().put(mediaPart).put(JSONObject().put("text", promptText))
         val contents = JSONArray().put(JSONObject().put("parts", parts))
         val genConfig = JSONObject()
             .put("responseMimeType", "application/json")
@@ -78,7 +93,7 @@ object Gemini {
         val body = JSONObject().put("contents", contents).put("generationConfig", genConfig)
 
         val request = Request.Builder()
-            .url("https://generativelanguage.googleapis.com/v1beta/models/$MODEL:generateContent?key=$apiKey")
+            .url("https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=$apiKey")
             .post(body.toString().toRequestBody("application/json".toMediaType()))
             .build()
 
@@ -99,6 +114,7 @@ object Gemini {
             }
             if (code == 503) throw RuntimeException("Gemini is overloaded right now — try this reel again in a minute.")
             if (code == 429) throw RuntimeException("Your Gemini key hit its rate limit — wait a minute and retry.")
+            if (code == 404) throw RuntimeException("That Gemini model isn't available on your key — pick another in Settings.")
             throw RuntimeException("Gemini $code: ${respBody.take(180)}")
         }
     }
@@ -123,17 +139,17 @@ object Gemini {
     }
 
     /** YouTube: Gemini ingests the URL directly, no download needed. */
-    fun analyzeYoutube(apiKey: String, url: String): Analysis {
+    fun analyzeYoutube(apiKey: String, model: String, url: String, caption: String): Analysis {
         val part = JSONObject().put("file_data", JSONObject().put("file_uri", url))
-        return run(apiKey, part)
+        return run(apiKey, model, part, caption)
     }
 
     /** Instagram/TikTok/etc: send the downloaded audio inline as base64. */
-    fun analyzeInlineAudio(apiKey: String, base64: String, mimeType: String): Analysis {
+    fun analyzeInlineAudio(apiKey: String, model: String, base64: String, mimeType: String, caption: String): Analysis {
         val part = JSONObject().put(
             "inline_data",
             JSONObject().put("mime_type", mimeType).put("data", base64),
         )
-        return run(apiKey, part)
+        return run(apiKey, model, part, caption)
     }
 }

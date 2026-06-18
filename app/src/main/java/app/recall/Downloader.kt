@@ -31,4 +31,19 @@ object Downloader {
             ?: throw RuntimeException("Download produced no audio file")
         return DownloadedAudio(file, "audio/mp3")
     }
+
+    /** Best-effort fetch of the post's caption (yt-dlp's `description`). Empty string on failure. */
+    fun fetchCaption(url: String): String {
+        return try {
+            val request = YoutubeDLRequest(url).apply {
+                addOption("--skip-download")
+                addOption("--no-playlist")
+                addOption("--print", "%(description)s")
+            }
+            val out = YoutubeDL.getInstance().execute(request).out.trim()
+            if (out == "NA") "" else out
+        } catch (e: Throwable) {
+            ""
+        }
+    }
 }

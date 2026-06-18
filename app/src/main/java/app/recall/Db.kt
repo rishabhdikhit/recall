@@ -11,6 +11,7 @@ data class Entry(
     val title: String,
     val summary: String,
     val transcript: String,
+    val caption: String,
     val url: String,
     val source: String,
     val topic: String,
@@ -37,7 +38,7 @@ private const val FAILURES_DDL = """
     )
 """
 
-private class DbHelper(ctx: Context) : SQLiteOpenHelper(ctx, "recall.db", null, 2) {
+private class DbHelper(ctx: Context) : SQLiteOpenHelper(ctx, "recall.db", null, 3) {
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
             """
@@ -46,6 +47,7 @@ private class DbHelper(ctx: Context) : SQLiteOpenHelper(ctx, "recall.db", null, 
               title TEXT NOT NULL,
               summary TEXT NOT NULL,
               transcript TEXT NOT NULL DEFAULT '',
+              caption TEXT NOT NULL DEFAULT '',
               url TEXT NOT NULL UNIQUE,
               source TEXT NOT NULL,
               topic TEXT NOT NULL,
@@ -64,6 +66,7 @@ private class DbHelper(ctx: Context) : SQLiteOpenHelper(ctx, "recall.db", null, 
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         if (oldVersion < 2) db.execSQL(FAILURES_DDL.trimIndent())
+        if (oldVersion < 3) db.execSQL("ALTER TABLE entries ADD COLUMN caption TEXT NOT NULL DEFAULT ''")
     }
 }
 
@@ -79,6 +82,7 @@ object Repo {
         title = getString(getColumnIndexOrThrow("title")),
         summary = getString(getColumnIndexOrThrow("summary")),
         transcript = getString(getColumnIndexOrThrow("transcript")),
+        caption = getString(getColumnIndexOrThrow("caption")),
         url = getString(getColumnIndexOrThrow("url")),
         source = getString(getColumnIndexOrThrow("source")),
         topic = getString(getColumnIndexOrThrow("topic")),
@@ -108,6 +112,7 @@ object Repo {
             put("title", e.title)
             put("summary", e.summary)
             put("transcript", e.transcript)
+            put("caption", e.caption)
             put("url", e.url)
             put("source", e.source)
             put("topic", e.topic)
@@ -127,8 +132,8 @@ object Repo {
     fun search(q: String): List<Entry> {
         val like = "%$q%"
         return query(
-            "title LIKE ? OR summary LIKE ? OR transcript LIKE ? OR subtags LIKE ?",
-            arrayOf(like, like, like, like),
+            "title LIKE ? OR summary LIKE ? OR transcript LIKE ? OR caption LIKE ? OR subtags LIKE ?",
+            arrayOf(like, like, like, like, like),
         )
     }
 

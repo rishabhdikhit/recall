@@ -419,6 +419,7 @@ private fun SettingsScreen() {
     val ctx = LocalContext.current
     var key by remember { mutableStateOf(Prefs.geminiKey(ctx)) }
     var saved by remember { mutableStateOf(false) }
+    var model by remember { mutableStateOf(Prefs.geminiModel(ctx)) }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(18.dp)) {
         Text("Gemini API key", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.ExtraBold)
@@ -443,6 +444,35 @@ private fun SettingsScreen() {
                 ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://aistudio.google.com/apikey")))
             },
         )
+
+        Spacer(Modifier.height(30.dp))
+        Text("Gemini model", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.ExtraBold)
+        Spacer(Modifier.height(6.dp))
+        Text(
+            "Default is great for most posts. Pro / newer models are sharper but use your free quota faster.",
+            color = Muted, fontSize = 13.sp,
+        )
+        Spacer(Modifier.height(10.dp))
+        Gemini.MODELS.forEach { (label, id) ->
+            val isSelected = model == id
+            Row(
+                Modifier.fillMaxWidth().padding(vertical = 4.dp)
+                    .background(if (isSelected) Accent.copy(alpha = 0.18f) else FieldBg, RoundedCornerShape(10.dp))
+                    .clickable { model = id; Prefs.setGeminiModel(ctx, id) }
+                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        label + if (id == Gemini.DEFAULT_MODEL) "  (default)" else "",
+                        color = if (isSelected) Accent else Color(0xFFDDDDE6),
+                        fontSize = 15.sp, fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(id, color = Muted, fontSize = 11.sp)
+                }
+                if (isSelected) Text("✓", color = Accent, fontWeight = FontWeight.Bold)
+            }
+        }
     }
 }
 
@@ -469,6 +499,11 @@ private fun DetailOverlay(entry: Entry, onClose: () -> Unit, onChanged: () -> Un
             if (entry.subtags.isNotBlank()) {
                 Spacer(Modifier.height(10.dp))
                 Text("#" + entry.subtags.split(",").joinToString("  #") { it.trim() }, color = Accent, fontSize = 13.sp)
+            }
+
+            if (entry.caption.isNotBlank()) {
+                Section("Caption")
+                Text(entry.caption, color = Color(0xFFBBBBC8), fontSize = 14.sp)
             }
 
             if (entry.transcript.isNotBlank()) {

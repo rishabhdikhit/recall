@@ -58,15 +58,18 @@ class IngestService : Service() {
                     return@launch
                 }
 
+                val model = Prefs.geminiModel(this@IngestService)
+                val caption = Downloader.fetchCaption(url)
+
                 val analysis = if (detectSource(url) == "youtube") {
                     progress(startId, "Analyzing with Gemini…")
-                    Gemini.analyzeYoutube(key, url)
+                    Gemini.analyzeYoutube(key, model, url, caption)
                 } else {
                     progress(startId, "Downloading audio…")
                     val audio = Downloader.downloadAudioMp3(this@IngestService, url)
                     progress(startId, "Transcribing + summarizing…")
                     val b64 = Base64.encodeToString(audio.file.readBytes(), Base64.NO_WRAP)
-                    val a = Gemini.analyzeInlineAudio(key, b64, audio.mimeType)
+                    val a = Gemini.analyzeInlineAudio(key, model, b64, audio.mimeType, caption)
                     audio.file.delete()
                     a
                 }
@@ -77,6 +80,7 @@ class IngestService : Service() {
                         title = analysis.title,
                         summary = analysis.summary,
                         transcript = analysis.transcript,
+                        caption = caption,
                         url = url,
                         source = detectSource(url),
                         topic = analysis.topic,
