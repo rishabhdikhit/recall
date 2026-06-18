@@ -14,6 +14,7 @@ class RecallApp : Application() {
     override fun onCreate() {
         super.onCreate()
         instance = this
+        Repo.init(this)
         // init() unpacks the bundled Python + ffmpeg — must run off the main thread.
         thread {
             try {
