@@ -20,9 +20,22 @@ android {
         }
     }
 
+    signingConfigs {
+        create("stable") {
+            storeFile = file("../keystore/recall.jks")
+            storePassword = "recallapp"
+            keyAlias = "recall"
+            keyPassword = "recallapp"
+        }
+    }
+
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("stable")
+        }
         release {
             isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("stable")
         }
     }
 

@@ -193,13 +193,30 @@ private fun LibraryScreen(
     onTopic: (String?) -> Unit,
     onOpen: (Entry) -> Unit,
 ) {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
     Column(Modifier.fillMaxSize()) {
-        Field(
-            value = query,
-            onValueChange = onQuery,
-            placeholder = "Search titles, summaries, transcripts…",
-            modifier = Modifier.padding(horizontal = 14.dp).padding(top = 8.dp).fillMaxWidth(),
-        )
+        Row(
+            Modifier.padding(horizontal = 14.dp).padding(top = 8.dp).fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Field(
+                value = query,
+                onValueChange = onQuery,
+                placeholder = "Search titles, summaries, transcripts…",
+                modifier = Modifier.weight(1f),
+            )
+            Button(
+                onClick = {
+                    if (entries.isNotEmpty()) scope.launch {
+                        val f = withContext(Dispatchers.IO) { Pdf.export(ctx, entries, filterTopic ?: "Recall Library") }
+                        Pdf.share(ctx, f)
+                    }
+                },
+                colors = ButtonDefaults.buttonColors(containerColor = FieldBg),
+            ) { Text("PDF", color = Accent, fontWeight = FontWeight.Bold) }
+        }
         Row(
             Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 14.dp, vertical = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -434,6 +451,15 @@ private fun DetailOverlay(entry: Entry, onClose: () -> Unit, onChanged: () -> Un
                     onClick = { scope.launch { withContext(Dispatchers.IO) { Repo.setStar(entry.id, if (entry.starred == 1) 0 else 1) }; onChanged() } },
                     colors = ButtonDefaults.buttonColors(containerColor = FieldBg),
                 ) { Text(if (entry.starred == 1) "★ Unstar" else "☆ Star", color = Color(0xFFDDDDE6)) }
+                Button(
+                    onClick = {
+                        scope.launch {
+                            val f = withContext(Dispatchers.IO) { Pdf.export(ctx, listOf(entry), entry.title) }
+                            Pdf.share(ctx, f)
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = FieldBg),
+                ) { Text("PDF", color = Color(0xFFDDDDE6)) }
                 Button(
                     onClick = { scope.launch { withContext(Dispatchers.IO) { Repo.delete(entry.id) }; onChanged() } },
                     colors = ButtonDefaults.buttonColors(containerColor = FieldBg),
