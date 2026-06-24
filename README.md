@@ -27,7 +27,12 @@ No account. No server. Your data stays on your phone.
 
 ## Setup (2 minutes)
 
-1. **Install the app.** Download the latest `recall.apk` from [Releases](../../releases), open it, and allow "install from unknown sources."
+<p align="center">
+  <img src="docs/install-qr.png" alt="Scan to install the latest Recall APK" width="200"><br>
+  <em>Scan with your phone to download the latest <code>recall.apk</code></em>
+</p>
+
+1. **Install the app.** Scan the QR above (or download the latest `recall.apk` from [Releases](../../releases)), open it, and allow "install from unknown sources."
 2. **Get a free Gemini key.** Go to [aistudio.google.com/apikey](https://aistudio.google.com/apikey), create a key (free tier is plenty for personal use).
 3. **Paste it** into Recall → **Settings** → Save.
 
