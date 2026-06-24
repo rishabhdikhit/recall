@@ -140,6 +140,18 @@ object Repo {
     fun byTopic(topic: String, screenshots: Boolean): List<Entry> =
         query(screenshots, "topic = ?", arrayOf(topic))
 
+    /** topic -> number of saved entries in the current tab's scope. Only topics with >0 appear. */
+    fun topicCounts(screenshots: Boolean): Map<String, Int> {
+        val scope = if (screenshots) "source = 'screenshot'" else "source <> 'screenshot'"
+        val map = LinkedHashMap<String, Int>()
+        helper.readableDatabase.rawQuery(
+            "SELECT topic, COUNT(*) AS c FROM entries WHERE $scope GROUP BY topic", null,
+        ).use { c ->
+            while (c.moveToNext()) map[c.getString(0)] = c.getInt(1)
+        }
+        return map
+    }
+
     fun search(q: String, screenshots: Boolean): List<Entry> {
         val like = "%$q%"
         return query(

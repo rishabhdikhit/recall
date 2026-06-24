@@ -9,9 +9,14 @@ import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.IntentCompat
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -53,6 +58,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
@@ -68,11 +74,12 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-private val Bg = Color(0xFF0E0E12)
-private val CardBg = Color(0xFF16161D)
-private val FieldBg = Color(0xFF1C1C24)
-private val Accent = Color(0xFF7C5CFF)
-private val Muted = Color(0xFF8A8A99)
+// Nothing-OS palette lives in Theme.kt. These aliases keep existing call-sites working.
+private val Bg = Ink
+private val CardBg = GlassFill
+private val FieldBg = GlassStrong
+private val Accent = Signal
+private val Muted = Ash
 
 fun detectSource(url: String): String = when {
     url.contains("youtube.com", true) || url.contains("youtu.be", true) -> "youtube"
@@ -91,6 +98,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             notifPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
@@ -98,7 +106,7 @@ class MainActivity : ComponentActivity() {
         sharedImages = sharedImagesFrom(intent)
         setContent {
             MaterialTheme(colorScheme = darkColorScheme(background = Bg, surface = Bg, primary = Accent)) {
-                Surface(modifier = Modifier.fillMaxSize(), color = Bg) {
+                Surface(modifier = Modifier.fillMaxSize().dotGrid(), color = Bg) {
                     AppRoot(
                         sharedUrl = sharedUrl,
                         sharedImages = sharedImages,
@@ -171,8 +179,8 @@ private fun OnboardingOverlay(onFinish: () -> Unit) {
     val scope = rememberCoroutineScope()
     val last = pager.currentPage == ONBOARDING.lastIndex
 
-    Surface(Modifier.fillMaxSize(), color = Bg) {
-        Column(Modifier.fillMaxSize().padding(24.dp)) {
+    Surface(Modifier.fillMaxSize().dotGrid(), color = Bg) {
+        Column(Modifier.fillMaxSize().systemBarsPadding().padding(24.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                 TextButton(onClick = onFinish) { Text("Skip", color = Muted) }
             }
@@ -239,6 +247,7 @@ fun AppRoot(
     var filterTopic by remember { mutableStateOf<String?>(null) }
     var selected by remember { mutableStateOf<Entry?>(null) }
     var failures by remember { mutableStateOf(listOf<Failure>()) }
+    var topicCounts by remember { mutableStateOf<Map<String, Int>>(emptyMap()) }
     var refresh by remember { mutableStateOf(0) }
     var prefillUrl by remember { mutableStateOf<String?>(null) }
     val ctx = LocalContext.current
@@ -318,18 +327,28 @@ fun AppRoot(
                     else -> Repo.all(ss)
                 }
                 val fs = Repo.failures().filter { it.url.startsWith(IngestService.SCREENSHOT_PREFIX) == ss }
+                val tc = Repo.topicCounts(ss)
                 entries = es
                 failures = fs
+                topicCounts = tc
             }
         }
     }
 
-    Column(Modifier.fillMaxSize()) {
-        Column(Modifier.padding(horizontal = 18.dp).padding(top = 10.dp, bottom = 4.dp)) {
-            Text("Recall", color = Color.White, fontSize = 26.sp, fontWeight = FontWeight.ExtraBold)
+    Column(Modifier.fillMaxSize().statusBarsPadding()) {
+        Column(Modifier.padding(horizontal = 18.dp).padding(top = 12.dp, bottom = 4.dp)) {
             Text(
-                if (tab == Tab.Screenshots) "your screenshot memory" else "your video memory",
-                color = Accent, fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
+                "RECALL",
+                color = Paper,
+                fontSize = 26.sp,
+                fontWeight = FontWeight.ExtraBold,
+                fontFamily = FontFamily.Monospace,
+                letterSpacing = 4.sp,
+            )
+            SectionLabel(
+                if (tab == Tab.Screenshots) "// screenshot memory" else "// video memory",
+                color = Accent,
+                size = 10,
             )
         }
         if (activeCount > 0) {
@@ -350,6 +369,7 @@ fun AppRoot(
                     query = query,
                     onQuery = { query = it },
                     filterTopic = filterTopic,
+                    topicCounts = topicCounts,
                     onTopic = { filterTopic = it },
                     onOpen = { selected = it },
                     onRetry = { f ->
@@ -395,23 +415,37 @@ fun AppRoot(
 @Composable
 private fun BottomBar(active: Tab, onSelect: (Tab) -> Unit) {
     Row(
-        Modifier.fillMaxWidth().background(Bg).padding(vertical = 6.dp),
+        Modifier
+            .fillMaxWidth()
+            .navigationBarsPadding()
+            .padding(horizontal = 12.dp, vertical = 8.dp)
+            .glass(corner = 14, fill = GlassStrong),
     ) {
         for (t in Tab.values()) {
             val label = when (t) {
-                Tab.Add -> "+ Add"
-                Tab.Screenshots -> "Shots"
-                else -> t.name
+                Tab.Add -> "ADD"
+                Tab.Screenshots -> "SHOTS"
+                else -> t.name.uppercase()
             }
-            Box(
+            val on = t == active
+            Column(
                 Modifier.weight(1f).clickable { onSelect(t) }.padding(vertical = 12.dp),
-                contentAlignment = Alignment.Center,
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(5.dp),
             ) {
+                // Nothing-style signal dot marks the active tab.
+                Box(
+                    Modifier
+                        .size(5.dp)
+                        .background(if (on) Signal else Color.Transparent, CircleShape),
+                )
                 Text(
                     label,
-                    color = if (t == active) Accent else Muted,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.SemiBold,
+                    color = if (on) Paper else Muted,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = FontFamily.Monospace,
+                    letterSpacing = 1.sp,
                 )
             }
         }
@@ -426,6 +460,7 @@ private fun LibraryScreen(
     query: String,
     onQuery: (String) -> Unit,
     filterTopic: String?,
+    topicCounts: Map<String, Int>,
     onTopic: (String?) -> Unit,
     onOpen: (Entry) -> Unit,
     onRetry: (Failure) -> Unit,
@@ -459,8 +494,12 @@ private fun LibraryScreen(
             Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 14.dp, vertical = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Chip("All", filterTopic == null) { onTopic(null) }
-            for (t in Gemini.TOPICS) Chip(t, filterTopic == t) { onTopic(t) }
+            Chip("All", filterTopic == null, topicCounts.values.sum()) { onTopic(null) }
+            // Only show topics that actually have saved items, in the canonical order, each with its count.
+            for (t in Gemini.TOPICS) {
+                val n = topicCounts[t] ?: 0
+                if (n > 0) Chip(t, filterTopic == t, n) { onTopic(t) }
+            }
         }
 
         if (entries.isEmpty() && failures.isEmpty()) {
@@ -490,22 +529,22 @@ private fun LibraryScreen(
                 items(entries) { e ->
                     Column(
                         Modifier.fillMaxWidth().padding(bottom = 10.dp)
-                            .background(CardBg, RoundedCornerShape(14.dp))
+                            .glass(corner = 10)
                             .clickable { onOpen(e) }.padding(14.dp),
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(e.source.uppercase(), color = Accent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            SectionLabel(e.source, color = Accent, size = 10)
                             Spacer(Modifier.width(8.dp))
-                            Text(e.topic, color = Muted, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                            SectionLabel(e.topic, color = Muted, size = 10)
                             if (e.starred == 1) {
                                 Spacer(Modifier.weight(1f))
-                                Text("★", color = Color(0xFFFFCC4D))
+                                Text("★", color = Paper)
                             }
                         }
-                        Spacer(Modifier.height(4.dp))
-                        Text(e.title, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                        Spacer(Modifier.height(6.dp))
+                        Text(e.title, color = Paper, fontSize = 16.sp, fontWeight = FontWeight.Bold)
                         Spacer(Modifier.height(3.dp))
-                        Text(e.summary, color = Color(0xFFB0B0BC), fontSize = 13.sp, maxLines = 2)
+                        Text(e.summary, color = Ash, fontSize = 13.sp, maxLines = 2)
                     }
                 }
             }
@@ -677,8 +716,8 @@ private fun SettingsScreen(onReplayOnboarding: () -> Unit) {
 private fun DetailOverlay(entry: Entry, onClose: () -> Unit, onChanged: () -> Unit) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
-    Surface(Modifier.fillMaxSize(), color = Bg) {
-        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp)) {
+    Surface(Modifier.fillMaxSize().dotGrid(), color = Bg) {
+        Column(Modifier.fillMaxSize().systemBarsPadding().verticalScroll(rememberScrollState()).padding(20.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(entry.source.uppercase(), color = Accent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.width(8.dp))
@@ -754,14 +793,42 @@ private fun Section(title: String) {
 }
 
 @Composable
-private fun Chip(label: String, active: Boolean, onClick: () -> Unit) {
-    Box(
+private fun Chip(label: String, active: Boolean, count: Int = -1, onClick: () -> Unit) {
+    val shape = RoundedCornerShape(6.dp)
+    Row(
         Modifier
-            .background(if (active) Accent else FieldBg, RoundedCornerShape(20.dp))
+            .clip(shape)
+            .background(if (active) Signal else GlassFill)
+            .border(1.dp, if (active) Signal else Hairline, shape)
             .clickable { onClick() }
-            .padding(horizontal = 14.dp, vertical = 7.dp),
+            .padding(horizontal = 12.dp, vertical = 7.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(7.dp),
     ) {
-        Text(label, color = if (active) Color.White else Muted, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+        Text(
+            label.uppercase(),
+            color = if (active) Color.White else Muted,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Bold,
+            fontFamily = FontFamily.Monospace,
+            letterSpacing = 1.sp,
+        )
+        if (count >= 0) {
+            Box(
+                Modifier
+                    .background(if (active) Color.White.copy(alpha = 0.22f) else Ink, CircleShape)
+                    .border(1.dp, if (active) Color.Transparent else Hairline, CircleShape)
+                    .padding(horizontal = 6.dp, vertical = 1.dp),
+            ) {
+                Text(
+                    count.toString(),
+                    color = if (active) Color.White else Signal,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = FontFamily.Monospace,
+                )
+            }
+        }
     }
 }
 
