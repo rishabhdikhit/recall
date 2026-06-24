@@ -71,6 +71,9 @@ dependencies {
     implementation("androidx.compose.ui:ui-graphics")
     implementation("androidx.compose.material3:material3")
 
+    // Home-screen widget (Jetpack Compose for app widgets).
+    implementation("androidx.glance:glance-appwidget:1.1.0")
+
     implementation("io.github.junkfood02.youtubedl-android:library:0.18.1")
     implementation("io.github.junkfood02.youtubedl-android:ffmpeg:0.18.1")
 

@@ -85,8 +85,13 @@ private class DbHelper(ctx: Context) : SQLiteOpenHelper(ctx, "recall.db", null, 
 object Repo {
     private lateinit var helper: DbHelper
 
+    @Volatile
+    private var initialized = false
+
     fun init(ctx: Context) {
+        if (initialized) return
         helper = DbHelper(ctx.applicationContext)
+        initialized = true
     }
 
     private fun Cursor.toEntry(): Entry = Entry(
@@ -163,6 +168,19 @@ object Repo {
 
     fun getByUrl(url: String): Entry? {
         helper.readableDatabase.rawQuery("SELECT * FROM entries WHERE url = ?", arrayOf(url)).use { c ->
+            return if (c.moveToFirst()) c.toEntry() else null
+        }
+    }
+
+    fun getById(id: String): Entry? {
+        helper.readableDatabase.rawQuery("SELECT * FROM entries WHERE id = ?", arrayOf(id)).use { c ->
+            return if (c.moveToFirst()) c.toEntry() else null
+        }
+    }
+
+    /** Most recently saved entry across all sources — for the home-screen widget. */
+    fun latest(): Entry? {
+        helper.readableDatabase.rawQuery("SELECT * FROM entries ORDER BY createdAt DESC LIMIT 1", null).use { c ->
             return if (c.moveToFirst()) c.toEntry() else null
         }
     }

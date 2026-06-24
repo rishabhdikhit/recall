@@ -151,6 +151,7 @@ class IngestService : Service() {
                 rotation.cancel()
                 IngestBus.changed.value = IngestBus.changed.value + 1
                 IngestBus.active.value = (IngestBus.active.value - 1).coerceAtLeast(0)
+                runCatching { RecallWidget.refresh(this@IngestService) }
                 stopSelf(startId)
             }
         }

@@ -59,6 +59,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
@@ -94,6 +96,8 @@ private fun firstUrl(text: String?): String? =
 class MainActivity : ComponentActivity() {
     private var sharedUrl by mutableStateOf<String?>(null)
     private var sharedImages by mutableStateOf<List<Uri>?>(null)
+    private var focusSearch by mutableStateOf(false)
+    private var openEntryId by mutableStateOf<String?>(null)
     private val notifPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -104,6 +108,7 @@ class MainActivity : ComponentActivity() {
         }
         sharedUrl = sharedUrlFrom(intent)
         sharedImages = sharedImagesFrom(intent)
+        applyWidgetIntent(intent)
         setContent {
             MaterialTheme(colorScheme = darkColorScheme(background = Bg, surface = Bg, primary = Accent)) {
                 Surface(modifier = Modifier.fillMaxSize().dotGrid(), color = Bg) {
@@ -112,9 +117,21 @@ class MainActivity : ComponentActivity() {
                         sharedImages = sharedImages,
                         onSharedConsumed = { sharedUrl = null },
                         onImagesConsumed = { sharedImages = null },
+                        focusSearch = focusSearch,
+                        onFocusSearchConsumed = { focusSearch = false },
+                        openEntryId = openEntryId,
+                        onOpenEntryConsumed = { openEntryId = null },
                     )
                 }
             }
+        }
+    }
+
+    /** Handle taps from the home-screen widget (quick-search / open-a-saved-memory). */
+    private fun applyWidgetIntent(intent: Intent?) {
+        when (intent?.action) {
+            ACTION_FOCUS_SEARCH -> focusSearch = true
+            ACTION_OPEN_ENTRY -> intent.getStringExtra(EXTRA_OPEN_ENTRY)?.let { openEntryId = it }
         }
     }
 
@@ -122,6 +139,7 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         sharedUrlFrom(intent)?.let { sharedUrl = it }
         sharedImagesFrom(intent)?.let { sharedImages = it }
+        applyWidgetIntent(intent)
     }
 
     private fun sharedUrlFrom(intent: Intent?): String? {
@@ -140,6 +158,13 @@ class MainActivity : ComponentActivity() {
                 IntentCompat.getParcelableArrayListExtra(intent, Intent.EXTRA_STREAM, Uri::class.java)
             else -> null
         }
+    }
+
+    companion object {
+        const val ACTION_FOCUS_SEARCH = "app.recall.FOCUS_SEARCH"
+        const val ACTION_OPEN_ENTRY = "app.recall.OPEN_ENTRY"
+        const val EXTRA_FOCUS_SEARCH = "focus_search"
+        const val EXTRA_OPEN_ENTRY = "open_entry_id"
     }
 }
 
@@ -240,6 +265,10 @@ fun AppRoot(
     sharedImages: List<Uri>?,
     onSharedConsumed: () -> Unit,
     onImagesConsumed: () -> Unit,
+    focusSearch: Boolean = false,
+    onFocusSearchConsumed: () -> Unit = {},
+    openEntryId: String? = null,
+    onOpenEntryConsumed: () -> Unit = {},
 ) {
     var tab by remember { mutableStateOf(Tab.Library) }
     var entries by remember { mutableStateOf(listOf<Entry>()) }
@@ -253,6 +282,18 @@ fun AppRoot(
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     var showOnboarding by remember { mutableStateOf(!Prefs.onboardingDone(ctx)) }
+
+    // Open a specific saved memory when launched from the home-screen widget.
+    LaunchedEffect(openEntryId) {
+        val eid = openEntryId ?: return@LaunchedEffect
+        val e = withContext(Dispatchers.IO) { Repo.getById(eid) }
+        if (e != null) selected = e
+        onOpenEntryConsumed()
+    }
+    // Widget's quick-search button → jump to the library (LibraryScreen focuses the field).
+    LaunchedEffect(focusSearch) {
+        if (focusSearch) { tab = Tab.Library; query = "" }
+    }
 
     val changed by IngestBus.changed.collectAsState()
     val activeCount by IngestBus.active.collectAsState()
@@ -371,6 +412,8 @@ fun AppRoot(
                     filterTopic = filterTopic,
                     topicCounts = topicCounts,
                     onTopic = { filterTopic = it },
+                    focusSearch = focusSearch && tab == Tab.Library,
+                    onSearchFocused = onFocusSearchConsumed,
                     onOpen = { selected = it },
                     onRetry = { f ->
                         // Leave the record + cached media; the service reuses it and clears it on success.
@@ -462,12 +505,22 @@ private fun LibraryScreen(
     filterTopic: String?,
     topicCounts: Map<String, Int>,
     onTopic: (String?) -> Unit,
+    focusSearch: Boolean = false,
+    onSearchFocused: () -> Unit = {},
     onOpen: (Entry) -> Unit,
     onRetry: (Failure) -> Unit,
     onDismiss: (Failure) -> Unit,
 ) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
+    val searchFocus = remember { FocusRequester() }
+    // Auto-focus the search field when opened from the widget's quick-search button.
+    LaunchedEffect(focusSearch) {
+        if (focusSearch) {
+            runCatching { searchFocus.requestFocus() }
+            onSearchFocused()
+        }
+    }
     Column(Modifier.fillMaxSize()) {
         Row(
             Modifier.padding(horizontal = 14.dp).padding(top = 8.dp).fillMaxWidth(),
@@ -478,7 +531,7 @@ private fun LibraryScreen(
                 value = query,
                 onValueChange = onQuery,
                 placeholder = "Search titles, summaries, transcripts…",
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.weight(1f).focusRequester(searchFocus),
             )
             Button(
                 onClick = {
