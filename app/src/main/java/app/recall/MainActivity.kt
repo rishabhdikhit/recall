@@ -756,6 +756,46 @@ private fun SettingsScreen(onReplayOnboarding: () -> Unit) {
             }
         }
 
+        Spacer(Modifier.height(30.dp))
+        Text("Download engine", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.ExtraBold)
+        Spacer(Modifier.height(6.dp))
+        val scope = rememberCoroutineScope()
+        var ytdlpVersion by remember { mutableStateOf<String?>(null) }
+        var updateStatus by remember { mutableStateOf<String?>(null) }
+        var updating by remember { mutableStateOf(false) }
+        LaunchedEffect(Unit) {
+            ytdlpVersion = withContext(Dispatchers.IO) { Ytdlp.version(ctx) }
+        }
+        Text(
+            "Reels are fetched by yt-dlp on your phone. It auto-updates daily; update now if a fetch keeps failing.",
+            color = Muted, fontSize = 13.sp,
+        )
+        Spacer(Modifier.height(10.dp))
+        Text(
+            "yt-dlp: " + (ytdlpVersion ?: "starting…"),
+            color = Color(0xFFDDDDE6), fontSize = 13.sp, fontFamily = FontFamily.Monospace,
+        )
+        updateStatus?.let {
+            Spacer(Modifier.height(4.dp))
+            Text(it, color = Accent, fontSize = 13.sp)
+        }
+        Spacer(Modifier.height(10.dp))
+        Button(
+            onClick = {
+                if (!updating) scope.launch {
+                    updating = true
+                    updateStatus = "Updating…"
+                    val result = withContext(Dispatchers.IO) { Ytdlp.updateNow(ctx) }
+                    ytdlpVersion = withContext(Dispatchers.IO) { Ytdlp.version(ctx) }
+                    updateStatus = result
+                    updating = false
+                }
+            },
+            enabled = !updating,
+            colors = ButtonDefaults.buttonColors(containerColor = FieldBg),
+            modifier = Modifier.fillMaxWidth(),
+        ) { Text(if (updating) "Updating…" else "Update yt-dlp now", color = Accent, fontWeight = FontWeight.Bold) }
+
         Spacer(Modifier.height(28.dp))
         Text(
             "How it works",

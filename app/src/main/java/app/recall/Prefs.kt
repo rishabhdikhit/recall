@@ -7,6 +7,7 @@ object Prefs {
     private const val KEY_GEMINI = "gemini_key"
     private const val KEY_MODEL = "gemini_model"
     private const val KEY_ONBOARDED = "onboarding_done"
+    private const val KEY_YTDLP_UPDATED = "ytdlp_updated_at"
 
     private fun sp(ctx: Context) = ctx.getSharedPreferences(FILE, Context.MODE_PRIVATE)
 
@@ -27,5 +28,11 @@ object Prefs {
 
     fun setOnboardingDone(ctx: Context) {
         sp(ctx).edit().putBoolean(KEY_ONBOARDED, true).apply()
+    }
+
+    fun ytdlpUpdatedAt(ctx: Context): Long = sp(ctx).getLong(KEY_YTDLP_UPDATED, 0L)
+
+    fun setYtdlpUpdatedAt(ctx: Context, value: Long) {
+        sp(ctx).edit().putLong(KEY_YTDLP_UPDATED, value).apply()
     }
 }
